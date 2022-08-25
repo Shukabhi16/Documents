@@ -1,0 +1,169 @@
+/// Process class to load the incoming data to NormalizationTable
+Class CUSTOM.RITE.LateBinding.Process.RdmNormBusinessProcess Extends Ens.BusinessProcess [ ClassType = persistent ]
+{
+
+Property HasHeader As %Integer [ InitialExpression = 1 ];
+
+Parameter SETTINGS = "HasHeader";
+
+Method OnRequest(pRequest As Ens.StreamContainer, Output pResponse As Ens.Response) As %Status
+{
+	Set tStatus=$$$OK
+	Set tReadMode = ""
+	Try {		
+		//Creating a transaction scope to insert the data
+		&sql(START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED)
+		
+		//If incoming file name contains '_FULL_' or '_full_'
+		Set tPathDelimeter = "\"					//Path delimiter for windows servers
+		Set tFileName = ""
+		If pRequest.OriginalFilename["/" {		//Path seems to be of linux / iOS servers
+			Set tPathDelimeter = "/"				//Path delimiter for linux / iOS servers
+		}
+		Set tFileName = $Piece(pRequest.OriginalFilename,tPathDelimeter,$L(pRequest.OriginalFilename,tPathDelimeter))
+		
+		$$$TRACE("READING FROM FILE: "_pRequest.OriginalFilename)
+		
+		If $ZCONVERT(tFileName,"U")["_FULL" {
+			Set tReadMode = "FULL"
+		}		
+		
+		$$$TRACE("READ MODE: "_tReadMode_", FILE NAME: "_tFileName_", CONTAINS FULL: "_$ZCONVERT(tFileName,"U")["_FULL")
+		
+		If tReadMode="FULL" {
+			$$$TRACE("FULL LOAD STARTED, CLEANING OLD DATA")
+			
+			//Locking the table global for concurrency		
+			$$$TRACE("REQUESTING LOCK FOR CUSTOM.LB.NormalizationD, CUSTOM.LB.NormalizationI FOR A FULL LOAD")
+			
+			Lock +^CUSTOM.LB.NormalizationD:90
+			
+			If ('$TEST)
+			{
+				$$$ThrowStatus($$$ERROR($$$GeneralError,"COULD NOT LOCK GLOBAL ^CUSTOM.LB.NormalizationD")) 
+			}
+			
+			$$$TRACE("TRYING TO DELETE OLD RECORDS")
+			Set tSQLDelete="Delete From CUSTOM_CORE_LateBinding.NormalizationTable"
+			Set tResults = ##class(%SQL.Statement).%ExecDirect(,.tSQLDelete)
+			If (tResults.%SQLCODE < 0) {
+				Set tStatus = $$$ERROR(0,"Error deleting messages: "_tResults.%SQLCODE_"/"_tResults.%Message)
+				$$$ThrowOnError(tStatus)
+			}
+			$$$TRACE("OLD RECORDS DELETED")
+		}
+		
+		Set tFileStream = pRequest.Stream
+
+		If tStatus'=$$$OK Set pResponse = ""
+		
+		if ..HasHeader=1 {
+			$$$TRACE("TRYING TO DISCARD HEADER")
+			//Remove headers
+			Set tRecord=tFileStream.ReadLine()
+			$$$TRACE("HEADER DISCARDED")
+		}
+		
+		Set tDelim=$C(9)	//Tab Delimited
+		set tNowTimeStamp = $ZDT($H,3,1)
+		
+		$$$TRACE("STARTING TO READ FILE")	
+		While ('tFileStream.AtEnd) {
+			Set tRecord=tFileStream.ReadLine()
+			
+			//Properties for Lookup Index
+			set tEntity = $P(tRecord,tDelim,1)
+			set tMappingGroup = $P(tRecord,tDelim,3)
+			set tIncode = $P(tRecord,tDelim,4)
+			set tInCodingSystem = $P(tRecord,tDelim,6)
+			
+			Set tNormRecord = $$$NULLOREF
+			set tIsInLookupIndex = 0
+			
+			$$$TRACE("LOOKING UP FOR EXISTING DATA")
+			//Does this entry already exist????? if so, lets fetch and update
+			set tIsInLookupIndex = ##class(CUSTOM.CORE.LateBinding.NormalizationTable).LookupExists(tEntity,tMappingGroup,tIncode, tInCodingSystem)
+			$$$TRACE("Update (1) or Create (0): "_tIsInLookupIndex_" for the following Record: "_tRecord)
+					
+			if (tIsInLookupIndex) {
+				//update Existing
+				set tNormRecord = ##class(CUSTOM.CORE.LateBinding.NormalizationTable).LookupOpen(tEntity,tMappingGroup,tIncode, tInCodingSystem)	
+			} else {
+				//Create a New Record
+				Set tNormRecord=##class(CUSTOM.CORE.LateBinding.NormalizationTable).%New()
+				Set tNormRecord.CreatedOn = tNowTimeStamp
+			}
+			
+			//Start - Setting Properties for Normalization Update Tool - NGL
+			if (('tIsInLookupIndex)||(tNormRecord.OutCode '= $P(tRecord,tDelim,7))||(tNormRecord.OutDescription '= $P(tRecord,tDelim,8)) || (tNormRecord.OutCodingSystem '= $P(tRecord,tDelim,9)) || (tNormRecord.IsDisabled = 1))
+			{
+				set tNormRecord.UpdateAnalytics = 1
+				set tNormRecord.LastUpdatedOn = $ZDT($H,3,1)
+			}
+			// Added to support the ability for the normalization update tool to handle records that have been disabled in MDS no longer in batch.
+			Set tNormRecord.IsCurrent = 1
+			Set tNormRecord.IsDisabled = 0
+			//End - Setting Properties for Normalization Update Tool
+			Set tNormRecord.Entity=tEntity
+			Set tNormRecord.Identifier=$P(tRecord,tDelim,2)
+			Set tNormRecord.MappingGroup=tMappingGroup			
+			Set tNormRecord.InCode=tIncode
+			Set tNormRecord.InDescription=$P(tRecord,tDelim,5)
+			Set tNormRecord.InCodingSystem=tInCodingSystem
+			Set tNormRecord.OutCode=$P(tRecord,tDelim,7)
+			Set tNormRecord.OutDescription=$P(tRecord,tDelim,8)
+			Set tNormRecord.OutCodingSystem=$P(tRecord,tDelim,9)
+			Set tNormRecord.OutAlternateCode=$P(tRecord,tDelim,10)
+			Set tNormRecord.OutAlternateDescription=$P(tRecord,tDelim,11)
+			Set tNormRecord.OutAlternateCodingSystem=$P(tRecord,tDelim,12)
+			
+			If (tNormRecord.InCode=""&&(tNormRecord.InDescription="")&&(tNormRecord.InCodingSystem="")) $$$ThrowStatus($$$ERROR($$$GeneralError,"Could not save record with no input values")) 
+			If (tNormRecord.OutCode=""&&(tNormRecord.OutDescription="")&&(tNormRecord.OutCodingSystem="")) $$$ThrowStatus($$$ERROR($$$GeneralError,"Could not save record with no output values")) 
+			$$$TRACE("FILING RECORD: "_tNormRecord.Entity)
+			Set tStatus=tNormRecord.%Save()
+			
+			$$$TRACE("SAVE STATUS: "_tStatus)
+			
+			If (tStatus'=$$$OK) $$$ThrowStatus(tStatus) 
+
+		}
+		&sql(COMMIT)
+		
+	} Catch(ex) {
+		$$$TRACE("IN CATCH")
+		Set tStatus=ex.AsStatus()
+		$$$LOGERROR(tStatus)
+		$$$TRACE("TRYING TO ROLLBACK")
+		&sql(ROLLBACK WORK)
+		$$$TRACE("ROLLED BACK")
+	}
+	
+	If tReadMode="FULL" {
+        $$$TRACE("RELEASING ALL LOCKS CREATED BY FULL LOAD.")
+        Lock
+        $$$TRACE("RELEASED ALL LOCKS")
+       
+        //rebuild xslt only for full load if we have no error
+        Set:tStatus=$$$OK tStatus=##class(CUSTOM.CORE.LateBinding.AutoGenerateXslt).GenerateXslt()
+    }
+       
+    If tStatus=$$$OK {
+        Set pResponse = ##class(Ens.StringContainer).%New("File successfully processed.")
+    }
+	 
+	Quit tStatus
+}
+
+Storage Default
+{
+<Data name="RdmNormBusinessProcessDefaultData">
+<Subscript>"RdmNormBusinessProcess"</Subscript>
+<Value name="1">
+<Value>HasHeader</Value>
+</Value>
+</Data>
+<DefaultData>RdmNormBusinessProcessDefaultData</DefaultData>
+<Type>%Library.CacheStorage</Type>
+}
+
+}
