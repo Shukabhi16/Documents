@@ -1,0 +1,214 @@
+Class CUSTOM.QMAC.Patch.Projects.QmacOncoEmrCcdInbound Extends Workbench.SourceControl.Deployment
+{
+
+Method CustomNamespaceList() As %String
+{
+	Quit "QMAC"
+}
+
+ClassMethod GetEnableItemList(ByRef pEnableList As %ListOfDataTypes) As %Status
+{
+	Set tStatus = $$$OK
+	Set pEnableList = ##class(%ListOfDataTypes).%New()
+ 	Try
+	{
+		Set tEnv = $GET(^zEnvFlag)
+       	If (tEnv '= "PROD") & (tEnv '= "STAGE"){
+			Set tStatus = pEnableList.Insert("FromQmacOncoEmrCcdTestService:QMAC")
+		}
+		Set tStatus = pEnableList.Insert("QmacOncoEmrCcdToHealthShare:QMAC")
+       	Set tStatus = pEnableList.Insert("CUSTOM.EDGE.WS.WebServices:QMAC")
+       	Set tStatus = pEnableList.Insert("OncoEmrCcdToHealthShareRtr:QMAC")
+       	Set tStatus = pEnableList.Insert("QmacCcdSdaHandler:QMAC")             
+	} Catch (ex)
+	{
+		Set tStatus=ex.AsStatus() 
+	}
+		
+	Quit tStatus
+}
+
+ClassMethod GetDisableItemList(ByRef pDisableList As %ListOfDataTypes) As %Status
+{
+	Set tStatus = $$$OK
+
+	Set pDisableList = ##class(%ListOfDataTypes).%New()
+
+	Try
+	{
+		Set tEnv = $GET(^zEnvFlag)
+       	If (tEnv '= "PROD") & (tEnv '= "STAGE"){
+			Set tStatus = pDisableList.Insert("FromQmacOncoEmrCcdTestService:QMAC")
+		}
+		Set tStatus = pDisableList.Insert("QmacOncoEmrCcdToHealthShare:QMAC")
+       	Set tStatus = pDisableList.Insert("CUSTOM.EDGE.WS.WebServices:QMAC")
+       	Set tStatus = pDisableList.Insert("OncoEmrCcdToHealthShareRtr:QMAC")
+		Set tStatus = pDisableList.Insert("QmacCcdSdaHandler:QMAC")		
+	} Catch (ex)
+	{
+		Set tStatus=ex.AsStatus()
+	}
+	
+	Quit tStatus
+}
+
+XData Personal
+{
+<Configuration>
+<Namespace Name="QMAC">
+<Production  Name="QMAC.EdgeGatewayProduction">
+  <Item Name="FromQmacOncoEmrCcdTestService" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.Service.CCDTestService" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+   <Setting Target="Host" Name="TargetConfigNames">OncoEmrCcdToHealthShareRtr</Setting>
+   <Setting Target="Adapter" Name="FilePath">C:/temp/Data/QMAC/In/</Setting>
+   <Setting Target="Adapter" Name="FileSpec">FromQmacOncoEmrCcdTestService*</Setting>
+  </Item>
+  <Item Name="QmacOncoEmrCcdToHealthShare" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.DataTransformations.QmacOncoEmrCcdToHealthshare" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+     <Setting Target="Host" Name="Target">QmacCcdSdaHandler</Setting>
+     <Setting Target="Host" Name="CDALoggingConfig">0</Setting>
+     <Setting Target="Host" Name="CDALoggingPath">C:/temp/Data/</Setting>
+     <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+  </Item>
+  <Item Name="QmacCcdSdaHandler" Category="QMAC,CCD,ONCOEMR" ClassName="HS.Gateway.SDA.InboundProcess" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+	<Setting Target="Host" Name="MPIUpdateMode">IfInsert</Setting>
+	<Setting Target="Host" Name="ECRTarget">CUSTOM.EDGE.Operation.Manager</Setting>
+	<Setting Target="Host" Name="PostProcessor">SourceValueRecorder</Setting>
+	<Setting Target="Host" Name="UpdateECRDemographics">0</Setting>
+  </Item>
+  <Item Name="CUSTOM.EDGE.WS.WebServices" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.EDGE.WS.WebServices" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ECRTarget">OncoEmrCcdToHealthShareRtr</Setting>
+  </Item>
+  <Item Name="OncoEmrCcdToHealthShareRtr" Category="QMAC,CCD,ONCOEMR" ClassName="EnsLib.MsgRouter.RoutingEngine" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+    <Setting Target="Host" Name="Validation">dm-z</Setting>
+    <Setting Target="Host" Name="BusinessRuleName">CUSTOM.QMAC.Rules.OncoEmrCcdToHealthshareRules</Setting>
+  </Item>
+ </Production>
+</Namespace>
+</Configuration>
+}
+
+XData Dev
+{
+<Configuration>
+<Namespace Name="QMAC">
+<Production  Name="QMAC.EdgeGatewayProduction">
+  <Item Name="FromQmacOncoEmrCcdTestService" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.Service.CCDTestService" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+  	 <Setting Target="Adapter" Name="FileSpec">FromQmacOncoEmrCcdTestService*</Setting>
+     <Setting Target="Host" Name="TargetConfigNames">OncoEmrCcdToHealthShareRtr</Setting>
+  </Item>
+  <Item Name="QmacOncoEmrCcdToHealthShare" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.DataTransformations.QmacOncoEmrCcdToHealthshare" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+     <Setting Target="Host" Name="Target">QmacCcdSdaHandler</Setting>
+     <Setting Target="Host" Name="CDALoggingConfig">1</Setting>
+     <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+  </Item>
+    <Item Name="QmacCcdSdaHandler" Category="QMAC,CCD,ONCOEMR" ClassName="HS.Gateway.SDA.InboundProcess" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+	<Setting Target="Host" Name="MPIUpdateMode">IfInsert</Setting>
+	<Setting Target="Host" Name="ECRTarget">CUSTOM.EDGE.Operation.Manager</Setting>
+	<Setting Target="Host" Name="PostProcessor">SourceValueRecorder</Setting>
+	<Setting Target="Host" Name="UpdateECRDemographics">0</Setting>
+  </Item>
+  <Item Name="CUSTOM.EDGE.WS.WebServices" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.EDGE.WS.WebServices" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ECRTarget">OncoEmrCcdToHealthShareRtr</Setting>
+  </Item>
+  <Item Name="OncoEmrCcdToHealthShareRtr" Category="QMAC,CCD,ONCOEMR" ClassName="EnsLib.MsgRouter.RoutingEngine" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+    <Setting Target="Host" Name="Validation">dm-z</Setting>
+    <Setting Target="Host" Name="BusinessRuleName">CUSTOM.QMAC.Rules.OncoEmrCcdToHealthshareRules</Setting>
+  </Item>
+ </Production>
+</Namespace>
+</Configuration>
+}
+
+XData QA
+{
+<Configuration>
+<Namespace Name="QMAC">
+<Production  Name="QMAC.EdgeGatewayProduction">
+  <Item Name="FromQmacOncoEmrCcdTestService" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.Service.CCDTestService" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+     <Setting Target="Adapter" Name="FileSpec">FromQmacOncoEmrCcdTestService*</Setting>
+     <Setting Target="Host" Name="TargetConfigNames">OncoEmrCcdToHealthShareRtr</Setting>
+  </Item>
+  <Item Name="QmacOncoEmrCcdToHealthShare" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.DataTransformations.QmacOncoEmrCcdToHealthshare" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+     <Setting Target="Host" Name="Target">QmacCcdSdaHandler</Setting>
+     <Setting Target="Host" Name="CDALoggingConfig">1</Setting>
+     <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+  </Item>
+    <Item Name="QmacCcdSdaHandler" Category="QMAC,CCD,ONCOEMR" ClassName="HS.Gateway.SDA.InboundProcess" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+	<Setting Target="Host" Name="MPIUpdateMode">IfInsert</Setting>
+	<Setting Target="Host" Name="ECRTarget">CUSTOM.EDGE.Operation.Manager</Setting>
+	<Setting Target="Host" Name="PostProcessor">SourceValueRecorder</Setting>
+	<Setting Target="Host" Name="UpdateECRDemographics">0</Setting>
+  </Item>
+  <Item Name="CUSTOM.EDGE.WS.WebServices" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.EDGE.WS.WebServices" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ECRTarget">OncoEmrCcdToHealthShareRtr</Setting>
+  </Item>
+  <Item Name="OncoEmrCcdToHealthShareRtr" Category="QMAC,CCD,ONCOEMR" ClassName="EnsLib.MsgRouter.RoutingEngine" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+    <Setting Target="Host" Name="Validation">dm-z</Setting>
+    <Setting Target="Host" Name="BusinessRuleName">CUSTOM.QMAC.Rules.OncoEmrCcdToHealthshareRules</Setting>
+  </Item>
+ </Production>
+</Namespace>
+</Configuration>
+}
+
+XData Stage
+{
+<Configuration>
+<Namespace Name="QMAC">
+<Production  Name="QMAC.EdgeGatewayProduction">  
+  <Item Name="QmacOncoEmrCcdToHealthShare" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.DataTransformations.QmacOncoEmrCcdToHealthshare" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+     <Setting Target="Host" Name="Target">QmacCcdSdaHandler</Setting>
+     <Setting Target="Host" Name="CDALoggingConfig">0</Setting>
+     <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+  </Item>  
+  <Item Name="QmacCcdSdaHandler" Category="QMAC,CCD,ONCOEMR" ClassName="HS.Gateway.SDA.InboundProcess" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+	<Setting Target="Host" Name="MPIUpdateMode">IfInsert</Setting>
+	<Setting Target="Host" Name="ECRTarget">CUSTOM.EDGE.Operation.Manager</Setting>
+	<Setting Target="Host" Name="PostProcessor">SourceValueRecorder</Setting>
+	<Setting Target="Host" Name="UpdateECRDemographics">0</Setting>
+  </Item>
+  <Item Name="CUSTOM.EDGE.WS.WebServices" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.EDGE.WS.WebServices" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ECRTarget">OncoEmrCcdToHealthShareRtr</Setting>
+  </Item>
+  <Item Name="OncoEmrCcdToHealthShareRtr" Category="QMAC,CCD,ONCOEMR" ClassName="EnsLib.MsgRouter.RoutingEngine" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+    <Setting Target="Host" Name="Validation">dm-z</Setting>
+    <Setting Target="Host" Name="BusinessRuleName">CUSTOM.QMAC.Rules.OncoEmrCcdToHealthshareRules</Setting>
+  </Item>
+ </Production>
+</Namespace>
+</Configuration>
+}
+
+XData Prod
+{
+<Configuration>
+<Namespace Name="QMAC">
+<Production  Name="QMAC.EdgeGatewayProduction">  
+  <Item Name="QmacOncoEmrCcdToHealthShare" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.QMAC.DataTransformations.QmacOncoEmrCcdToHealthshare" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+     <Setting Target="Host" Name="Target">QmacCcdSdaHandler</Setting>
+     <Setting Target="Host" Name="CDALoggingConfig">0</Setting>
+     <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+  </Item>
+  <Item Name="QmacCcdSdaHandler" Category="QMAC,CCD,ONCOEMR" ClassName="HS.Gateway.SDA.InboundProcess" PoolSize="1" Enabled="true" Foreground="false" DisableErrorTraps="false" Comment="" LogTraceEvents="false" Schedule="">
+	<Setting Target="Host" Name="MPIUpdateMode">IfInsert</Setting>
+	<Setting Target="Host" Name="ECRTarget">CUSTOM.EDGE.Operation.Manager</Setting>
+	<Setting Target="Host" Name="PostProcessor">SourceValueRecorder</Setting>
+	<Setting Target="Host" Name="UpdateECRDemographics">0</Setting>
+  </Item>
+  <Item Name="CUSTOM.EDGE.WS.WebServices" Category="QMAC,CCD,ONCOEMR" ClassName="CUSTOM.EDGE.WS.WebServices" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ECRTarget">OncoEmrCcdToHealthShareRtr</Setting>
+  </Item>
+  <Item Name="OncoEmrCcdToHealthShareRtr" Category="QMAC,CCD,ONCOEMR" ClassName="EnsLib.MsgRouter.RoutingEngine" PoolSize="1" Enabled="true" Foreground="false" Comment="" LogTraceEvents="false" Schedule="">
+    <Setting Target="Host" Name="ReplyCodeActions">E=D</Setting>
+    <Setting Target="Host" Name="Validation">dm-z</Setting>
+    <Setting Target="Host" Name="BusinessRuleName">CUSTOM.QMAC.Rules.OncoEmrCcdToHealthshareRules</Setting>
+  </Item>
+ </Production>
+</Namespace>
+</Configuration>
+}
+
+}
