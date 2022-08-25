@@ -1,0 +1,94 @@
+Include HS.Common
+
+/// A sample Inbound Process component that receives HL7 input from one or more Input Service components 
+/// such as an HL7 file service and transforms it into the format required by HealthShare.
+Class CUSTOM.EDGE.Operation.InboundProcess Extends (HS.Gateway.HL7.InboundProcess, HS.Util.Trace.Helper, Ens.BusinessOperation) [ ProcedureBlock ]
+{
+
+XData MessageMap
+{
+<MapItems>
+	<MapItem MessageType="EnsLib.HL7.Message"> 
+		<Method>ProcessHL7Message</Method>
+	</MapItem>
+</MapItems>
+}
+
+/// Process an inbound HL7 v2.5 message into the gateway
+Method ProcessHL7Message(pRequest As EnsLib.HL7.Message, Output pResponse As EnsLib.HL7.Message) As %Status
+{
+	#dim tSC As %Status
+	Set tSC=$$$OK,$ZT="Trap"
+
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ProcessHL7Message","HS.Gateway.HL7.InboundProcess","txt","***"_pRequest.Identifier,pRequest)
+	#endif
+	set file=pRequest.Source if $l(file) write:$zjob\1#2 !,"Processing file ",file
+	
+	Do {
+		// Invoke the pipeline, if specified
+		#if $$$HSDebug
+			do ##class(HS.Util.HSDebug).Debug("ProcessHL7Message","HS.Gateway.HL7.InboundProcess","txt","Pipeline="_..Pipeline)
+		#endif
+		If ..Pipeline'="" {
+			#dim pCleanMsg As EnsLib.HL7.Message
+			Set tSC = ..InvokePipeline(pRequest,.pCleanMsg,..Pipeline,$CASE(..PipelineMode,"DTL":1,"HOST":0,:""))
+			Quit:$$$ISERR(tSC)
+			
+			If $IsObject($GET(pCleanMsg)) {
+				// Use the response from the pipeline
+				Set pRequest = pCleanMsg
+			} Else {
+				// By returning a NULL message, the pipeline indicates that they want to not process this message
+				Quit
+			}
+		}
+	
+		// Convert the HL7 message to SDAXML   //***UPDATED to reference CUSTOM HL7ToSDA3 class below****
+		Set tSC=##class(CUSTOM.CORE.HL7.HL7ToSDA3).GetSDA(pRequest,.tSDAXML ,..LogHL7Alerts,..ObservationCompatibilityMode)
+		$$$HSTRACE("SDA3","tSDAXML",tSDAXML)
+		Quit:$$$ISERR(tSC)
+		
+		// Construct an ECRUpdateRequest with the SDAXML attached.
+		#dim tRequest As HS.Message.ECRUpdateRequest
+		Set tRequest = ##class(HS.Message.ECRUpdateRequest).%New()
+		Do tRequest.ContentStream.CopyFrom(tSDAXML)
+		// Removing the 0xe - $c(14)
+		Do tRequest.ContentStream.Write($TR(tRequest.ContentStream.Read(),$c(14)))
+		//Set tRequest.ContentStream=tSDAXML
+		Set tRequest.OriginalMessageId=pRequest.%Id() //for push
+		Set tRequest.StreamContentType="SDA3"
+			
+		// Check to see when an MPI update will be allowed
+		Set tRequest.MPIUpdateFlag = ..MPIUpdateMode
+		// and similarly, what sort of ECR updating will happen
+		Set tRequest.UpdateECRDemographics=..UpdateECRDemographics
+		
+		#if $$$HSDebug
+			do ##class(HS.Util.HSDebug).Debug("ProcessHL7Message","HS.Gateway.HL7.InboundProcess","txt","ECRUpdateRequest",tRequest)
+		#endif
+
+		// Now update the ECR.
+		Set tSC = ..SendRequestSync(..ECRTarget,tRequest)
+		Quit:$$$ISERR(tSC)
+		
+		// Invoke the post processor (if specified)
+		If ..PostProcessor'="" {
+			Set tSC = ..SendRequestAsync(..PostProcessor,pRequest)
+		}
+		
+	} While (0)
+	
+	write:$zjob\1#2 !,"done"
+	
+Exit
+	Do:$$$ISERR(tSC) ..ReportError(tSC, pRequest, .pResponse)	
+	Do:..EnableAcking ..OnConstructReply(tSC, pRequest, .pResponse)
+	
+	Quit tSC
+Trap
+	Set $ZT="",tSC=$$$EnsSystemError
+	Goto Exit
+}
+
+}
