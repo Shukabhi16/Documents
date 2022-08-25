@@ -1,0 +1,294 @@
+Class CUSTOM.RITE.OdsRefresh.Process.OdsRefresh Extends (Ens.BusinessProcess, Ens.Util.FunctionSet)
+{
+
+/// Query HSODS HS_Flash.StatTable determine MPIID exist on ODS
+Method OnRequest(pRequest As CUSTOM.RITE.OdsRefresh.Message.OdsRefreshRequest, Output pResponse As Ens.Response) As %Status
+{
+	s tStatus = $$$OK
+	
+	Try {
+		Set tNormalizationTable = pRequest.NormalizationTable
+		Set tNormRequestTimeStamp = pRequest.RequestDateTime
+		
+		; Retrieve NormalizationTable updated code values
+		If tNormalizationTable = "CUSTOM_CORE_LateBinding.NormalizationTable" {
+			Set tStatus = ..QueryNormalizationTable(tNormRequestTimeStamp,.pNormalizationOdsRefreshRequest)
+		
+			; Set HsaaQueryEndTime
+			Set tHsaaQueryEndTime = $ZDT($H,3,1)
+			
+			; Call UpdateMetricsHsaaQueryEndTime
+			Set tStatus = ..UpdateMetricsHsaaQueryEndTime(tHsaaQueryEndTime)	
+		}
+		
+		; Retrieve ImoPreferredTable updated description values 
+		If tNormalizationTable = "CUSTOM.CORE.LateBinding.ImoPreferredTable" {
+			Set tStatus = ..QueryImoPreferredTable(tNormRequestTimeStamp,.pNormalizationOdsRequestMessage)
+		}
+		
+		; Retrieve Icd9ImoPreferred updated description values 
+		If tNormalizationTable = "CUSTOM.CORE.LateBinding.Icd9ImoPreferredTable" {
+			Set tStatus = ..QueryIcd9ImoPreferredTable(tNormRequestTimeStamp,.pNormalizationOdsRequestMessage)
+		}
+		
+		; Retrieve Icd10ImoPreferred updated description values 
+		If tNormalizationTable = "CUSTOM.CORE.LateBinding.Icd10ImoPreferredTable" {
+			Set tStatus = ..QueryIcd10ImoPreferredTable(tNormRequestTimeStamp,.pNormalizationOdsRequestMessage)
+		}				
+	}
+	
+	Catch ex {
+		$$$TRACE("INSIDE CATCH")
+		Set tStatus = ex.AsStatus()
+	}
+
+	Quit tStatus
+}
+
+/// Method retrieves all LateBinding Normalization codes that got updated yesterday and sends request message to NormalizationOdsRefresh
+Method QueryNormalizationTable(tNormRequestTimeStamp As %String, ByRef pNormalizationOdsRefreshRequest As CUSTOM.RITE.OdsRefresh.Message.NormalizationOdsRefreshRequest) As %Status
+{
+	s tStatus = $$$OK
+	
+	Try {
+
+		s tStatement = ##class("%SQL.Statement").%New()
+
+		s tQuery = "SELECT Entity, InCode, InCodingSystem "
+		s tQuery = tQuery _ "FROM CUSTOM_CORE_LateBinding.NormalizationTable "
+		s tQuery = tQuery _ "WHERE LastUpdatedOn >= '"_tNormRequestTimeStamp_"' "
+		s tQuery = tQuery _ "ORDER BY Entity "
+
+		s tStatus = tStatement.%Prepare(.tQuery)
+
+		If $$$ISERR(tStatus) {	
+			return tStatus	
+		}
+		Else {	
+			s tSQLResults = tStatement.%Execute()
+			
+			while tSQLResults.%Next() {
+				; Create OdsRefresh request message
+				s pNormalizationOdsRefreshRequest = ##class(CUSTOM.RITE.OdsRefresh.Message.NormalizationOdsRefreshRequest).%New()
+				
+				; Generate a new Session ID for each request message
+				Set ..%SessionId = ""
+
+				; Populate request message properties
+				s pNormalizationOdsRefreshRequest.Entity = tSQLResults.Entity		
+				s pNormalizationOdsRefreshRequest.InCode = tSQLResults.InCode
+				s pNormalizationOdsRefreshRequest.InCodingSystem = tSQLResults.InCodingSystem
+								
+				; Send OdsRefresh request message to NormalizationOdsRefresh
+			    s tStatus = ..SendRequestSync("NormalizationOdsRefreshOperation",pNormalizationOdsRefreshRequest,.tNormalizationOdsRefreshResponse)
+				Set RequestId = pNormalizationOdsRefreshRequest.%Id()
+			}
+		}
+	}
+	
+	Catch ex {
+		s tStatus = ex.AsStatus()
+	}
+	
+	return tStatus
+}
+
+/// Method retrives all LateBinding ImoPreferredTable descriptions that got updated yesterday and sends request message to ImoPreferredOdsRefreshBusinessProcess
+Method QueryImoPreferredTable(tNormRequestTimeStamp As %String, Output pImoPreferredOdsRequestMessage As CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest) As %Status
+{
+	s tStatus = $$$OK
+	
+	Try {
+
+		s tStatement = ##class("%SQL.Statement").%New()
+
+		s tQuery = "SELECT InDescription "
+		s tQuery = tQuery _ "FROM CUSTOM_CORE_LateBinding.ImoPreferredTable "
+		s tQuery = tQuery _ "WHERE LastUpdatedOn >= '"_tNormRequestTimeStamp_"' "
+	
+		s tStatus = tStatement.%Prepare(.tQuery)
+	
+		If $$$ISERR(tStatus) {	
+			return tStatus	
+		}
+		Else {	
+			s tSQLResults = tStatement.%Execute()
+	
+			while tSQLResults.%Next() {
+				; Create OdsRefresh request message
+				s pImoPreferredOdsRequestMessage = ##class(CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest).%New()
+				
+				; Generate a new Session ID for each request message
+				Set ..%SessionId = ""				
+				
+				; Populate request message properties
+				s pImoPreferredOdsRequestMessage.InDescription = tSQLResults.InDescription
+				
+				; Send OdsRefresh request message to ImoPreferredOdsRefreshBusinessProcess
+			    s tStatus = ..SendRequestSync("ImoPreferredOdsRefreshOperation",pImoPreferredOdsRequestMessage,.tNormalizationOdsRefreshResponse)
+			}	
+		}
+	}
+	
+	Catch ex {
+		s tStatus = ex.AsStatus()
+	}
+	
+	return tStatus
+}
+
+/// Method retrives all LateBinding ImoPreferredTable descriptions that got updated yesterday and sends request message to ImoPreferredOdsRefreshBusinessProcess
+Method QueryIcd9ImoPreferredTable(tNormRequestTimeStamp As %String, Output pNormalizationOdsRequestMessage As CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest) As %Status
+{
+	s tStatus = $$$OK
+	
+	Try {
+
+		s tStatement = ##class("%SQL.Statement").%New()
+
+		s tQuery = "SELECT VocabularyCode "
+		s tQuery = tQuery _ "FROM CUSTOM_CORE_LateBinding.Icd9ImoPreferredTable "
+		s tQuery = tQuery _ "WHERE LastUpdatedOn >= '"_tNormRequestTimeStamp_"' "
+	
+		s tStatus = tStatement.%Prepare(.tQuery)
+	
+		If $$$ISERR(tStatus) {	
+			return tStatus	
+		}
+		Else {	
+			s tSQLResults = tStatement.%Execute()
+	
+			while tSQLResults.%Next() {
+				; Create OdsRefresh request message
+				s pNormalizationOdsRequestMessage = ##class(CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest).%New()
+				
+				; Generate a new Session ID for each request message
+				Set ..%SessionId = ""				
+				
+				; Populate request message properties
+				s pNormalizationOdsRequestMessage.InCode = tSQLResults.VocabularyCode
+				
+				; Send OdsRefresh request message to ImoPreferredOdsRefreshBusinessProcess
+			    s tStatus = ..SendRequestSync("ImoPreferredOdsRefreshOperation",pNormalizationOdsRequestMessage,.tNormalizationOdsRefreshResponse)
+			}	
+		}
+	}
+	
+	Catch ex {
+		s tStatus = ex.AsStatus()
+	}
+	
+	return tStatus
+}
+
+/// Method retrives all LateBinding ImoPreferredTable descriptions that got updated yesterday and sends request message to ImoPreferredOdsRefreshBusinessProcess
+Method QueryIcd10ImoPreferredTable(tNormRequestTimeStamp As %String, Output pNormalizationOdsRequestMessage As CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest) As %Status
+{
+	s tStatus = $$$OK
+	
+	Try {
+
+		s tStatement = ##class("%SQL.Statement").%New()
+
+		s tQuery = "SELECT VocabularyCode "
+		s tQuery = tQuery _ "FROM CUSTOM_CORE_LateBinding.Icd10ImoPreferredTable "
+		s tQuery = tQuery _ "WHERE LastUpdatedOn >= '"_tNormRequestTimeStamp_"' "
+	
+		s tStatus = tStatement.%Prepare(.tQuery)
+	
+		If $$$ISERR(tStatus) {	
+			return tStatus	
+		}
+		Else {	
+			s tSQLResults = tStatement.%Execute()
+	
+			while tSQLResults.%Next() {
+				; Create OdsRefresh request message
+				s pNormalizationOdsRequestMessage = ##class(CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest).%New()
+				
+				; Generate a new Session ID for each request message
+				Set ..%SessionId = ""				
+				
+				; Populate request message properties
+				s pNormalizationOdsRequestMessage.InCode = tSQLResults.VocabularyCode
+				
+				; Send OdsRefresh request message to ImoPreferredOdsRefreshBusinessProcess
+			    s tStatus = ..SendRequestSync("ImoPreferredOdsRefreshOperation",pNormalizationOdsRequestMessage,.tNormalizationOdsRefreshResponse)
+			}	
+		}
+	}
+	
+	Catch ex {
+		s tStatus = ex.AsStatus()
+	}
+	
+	return tStatus
+}
+
+Method UpdateMetricsOdsQueryEndTime(tOdsQueryEndTime As %String) As %Status
+{
+	Set tStatus=$$$OK
+
+	Try { 
+		s tStatement = ##class("%SQL.Statement").%New()
+	
+		s tQuery = "UPDATE CUSTOM_RITE_OdsRefresh_Metrics.OdsRefreshMetrics "
+		s tQuery = tQuery _ "SET OdsQueryEndTime = '" _ tOdsQueryEndTime _ "' "
+		s tQuery = tQuery _ "WHERE SessionID = '" _ ..%SessionId _ "'"
+	
+		s tStatus = tStatement.%Prepare(.tQuery)
+	
+		If $$$ISERR(tStatus) {
+			return tStatus
+		}
+		Else {
+			s tSQLResults = tStatement.%Execute()	
+		}
+	}
+	Catch (ex){
+		Set tStatus = ex.AsStatus()
+		$$$LOGERROR($SYSTEM.Status.GetErrorText(tStatus))
+	}
+	
+	quit tStatus
+}
+
+Method UpdateMetricsHsaaQueryEndTime(tHsaaQueryEndTime As %String) As %Status
+{
+	Set tStatus=$$$OK
+
+	Try { 
+		s tStatement = ##class("%SQL.Statement").%New()
+	
+		s tQuery = "UPDATE CUSTOM_RITE_OdsRefresh_Metrics.OdsRefreshMetrics "
+		s tQuery = tQuery _ "SET HsaaQueryEndTime = '" _ tHsaaQueryEndTime _ "' "
+		s tQuery = tQuery _ "WHERE SessionID = '" _ ..%SessionId _ "'"
+	
+		s tStatus = tStatement.%Prepare(.tQuery)
+	
+		If $$$ISERR(tStatus) {
+			return tStatus
+		}
+		Else {
+			s tSQLResults = tStatement.%Execute()	
+		}
+	}
+	Catch (ex){
+		Set tStatus = ex.AsStatus()
+		$$$LOGERROR($SYSTEM.Status.GetErrorText(tStatus))
+	}
+	
+	quit tStatus
+}
+
+Method OnResponse(pRequest As %Library.Persistent, ByRef pResponse As %Library.Persistent, callrequest As %Library.Persistent, callresponse As %Library.Persistent, pCompletionKey As %String) As %Status
+{
+	Quit $$$OK
+}
+
+Storage Default
+{
+<Type>%Library.CacheStorage</Type>
+}
+
+}
