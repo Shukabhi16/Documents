@@ -1,0 +1,56 @@
+Class CUSTOM.POSTROUTER.MessageArchive.Operation.AzureOperationXml Extends Ens.BusinessOperation
+{
+
+Parameter ADAPTER = "EnsLib.HTTP.OutboundAdapter";
+
+Property Adapter As EnsLib.HTTP.OutboundAdapter;
+
+Parameter INVOCATION = "Queue";
+
+Property BlobType As %String [ InitialExpression = "BlockBlob" ];
+
+Property AzureSubscriptionKey As %String(MAXLEN = 999);
+
+Property AzureNorthwellVersion As %String [ InitialExpression = "1.0" ];
+
+Property SecreteKey As %String(MAXLEN = 32);
+
+Parameter SETTINGS = "SecreteKey:Additional,BlobType:Additional,AzureSubscriptionKey:Additional,AzureNorthwellVersion:Additional";
+
+/*
+XData MessageMap
+{
+<MapItems>
+  <MapItem MessageType="Ens.StreamContainer">
+    <Method>ProcessXMLRequest</Method>
+  </MapItem>
+</MapItems>
+}*/
+Method OnMessage(pRequest As Ens.Request, Output pResponse As CUSTOM.CORE.MessageArchive.Message.Response) As %Status
+{
+	Set tSC=$$$OK
+	Try {
+		Do pRequest.XMLExportToStream(.StreamObj)
+		$$$LOGINFO(pRequest.XMLExport())
+		
+		#Dim tRestApiImpObj As CUSTOM.CORE.MessageArchive.Util.RestApiImplementor
+		
+		Set tRestApiImpObj=##class(CUSTOM.CORE.MessageArchive.Util.RestApiImplementor).%New().SetContentType("application/json").SetHeader("x-northwell-blobType",..BlobType).SetHeader("Ocp-Apim-Subscription-Key",..AzureSubscriptionKey).SetHeader("x-northwell-version",..AzureNorthwellVersion).SetRequestBody(StreamObj,..SecreteKey).SetSSLconfig(..Adapter.SSLConfig).EnableHttps(1).PutRequest(..Adapter.URL_$Zutil(5)_..%RequestHeader.%Id()).GetHttpResponse()
+		Set pResponse =##Class(CUSTOM.CORE.MessageArchive.Message.Response).%New()
+		Set pResponse.Status=$Replace(tRestApiImpObj.HttpRespone.StatusLine,"HTTP/1.1 ","")
+		Do pResponse.RawResponse.CopyFrom(tRestApiImpObj.HttpRespone.Data)
+		Do tRestApiImpObj.HttpResponse.Data.Rewind()
+		Set tRespStatusCode=+pResponse.Status
+		If ((tRespStatusCode>299)||(tRespStatusCode=0)){
+				$$$ThrowStatus($$$ERROR($$$GeneralError, "Failed:"_pResponse.Status_$Char(13,10)_"Response message:"_pResponse.RawResponse.Read()))	
+		}Else{
+			$$$LOGINFO("Successful:"_pResponse.Status_$Char(13,10)_"Response message:"_pResponse.RawResponse.Read())
+		}  
+	}
+	Catch (ex) {
+		$$$LOGERROR("Could not request url with error message: " _$SYSTEM.Status.GetErrorText(ex.AsStatus()))
+	}
+	QUIT tSC
+}
+
+}
