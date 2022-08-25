@@ -1,0 +1,403 @@
+Class CUSTOM.RITE.LateBinding.Process.ImoPreferredBusinessProcess Extends Ens.BusinessProcess
+{
+
+/// Configuration item(s) to which to send file stream messages
+Property TargetConfigNames As %String(MAXLEN = 1000);
+
+// these are the input file headers and table names used to identify the target table:
+
+Parameter ImoPreferredTableFileHeader As %String = "MappingGroup|InCode|InDescription|InCodingSystem|OutCode|OutDescription|OutCodingSystem|OutAlternateCode|OutAlternateDescription|OutAlternateCodingSystem";
+
+Parameter ImoPreferredTable As %String = "CUSTOM.CORE.LateBinding.ImoPreferredTable";
+
+Parameter Icd10ImoPreferredTableFileHeader As %String = "ICD10Code|ICD10Title|VocabularyCode|IMOCode|IMOPreferredCode|IMOPreferredDescription";
+
+Parameter Icd10ImoPreferredTable As %String = "CUSTOM.CORE.LateBinding.Icd10ImoPreferredTable";
+
+Parameter Icd9ImoPreferredTableFileHeader As %String = "ICD9Code|ICD9Title|VocabularyCode|IMOCode|IMOPreferredCode|IMOPreferredDescription";
+
+Parameter Icd9ImoPreferredTable As %String = "CUSTOM.CORE.LateBinding.Icd9ImoPreferredTable";
+
+Property delim As %String [ InitialExpression = "|" ];
+
+Method OnRequest(pRequest As %Library.Persistent, Output pResponse As %Library.Persistent) As %Status
+{
+	set tSC = $$$OK
+	
+	try {
+		if (pRequest.%IsA("Ens.StreamContainer")) {
+			set tSC = ..HandleStreamContainer(pRequest, .pResponse)  $$$ThrowOnError(tSC)
+		} else {
+			$$$ThrowStatus($$$EnsError($$$NotImplemented))
+		}
+		
+		set pResponse = ##class(Ens.Response).%New()
+		
+	} catch (ex) {
+		set tSC = ex.AsStatus()
+		}
+	quit tSC
+}
+
+Method GetTableRecord(pTableName, pRecord As %String, Output pTableRecord As %Library.Persistent, Output pIsUpdated As %Boolean) As %Status
+{
+
+	
+	//call the corresponding get method, return record
+	Set tSc = $Select(	pTableName=..#ImoPreferredTable:  ..GetTableRecordImoPreferred( pRecord, .pTableRecord, .pIsUpdated),
+						pTableName=..#Icd10ImoPreferredTable:  ..GetTableRecordIcd10ImoPreferred( pRecord, .pTableRecord, .pIsUpdated),
+						pTableName=..#Icd9ImoPreferredTable:  ..GetTableRecordIcd9ImoPreferred( pRecord, .pTableRecord, .pIsUpdated),
+						1:$$$ERROR($$$GeneralError,"Unsupported IMO table name: "_pTableName) )	
+	
+	Quit tSc
+}
+
+Method GetTableRecordImoPreferred(pRecord As %String, Output pTableRecord As %Library.Persistent, Output pIsUpdated As %Boolean) As %Status
+{
+	set tSC = $$$OK
+	try {
+		Set pTableRecord = $$$NULLOREF
+		Set pIsUpdated = 0
+		Set tDelim = ..delim
+
+		//layout: MappingGroup|InCode|InDescription|InCodingSystem|OutCode|OutDescription|OutCodingSystem
+		Set tMappingGroup 	 = $ZStrip($P(pRecord,tDelim,1),"<>WC")
+		Set tInCode 		 = $ZStrip($P(pRecord,tDelim,2),"<>WC")
+		Set tInDescription	 = $ZStrip($P(pRecord,tDelim,3),"<>WC")
+		Set tInCodingSystem  = $ZStrip($P(pRecord,tDelim,4),"<>WC")
+		Set tOutCode 		 = $ZStrip($P(pRecord,tDelim,5),"<>WC")
+		Set tOutDescription  = $ZStrip($P(pRecord,tDelim,6),"<>WC")
+		Set tOutCodingSystem = $ZStrip($P(pRecord,tDelim,7),"<>WC")
+		Set tOutAlternateCode = $ZStrip($P(pRecord,tDelim,8),"<>WC")
+		Set tOutAlternateDescription = $ZStrip($P(pRecord,tDelim,9),"<>WC")
+		Set tOutAlternateSystem = $ZStrip($P(pRecord,tDelim,10),"<>WC")
+		
+		If (##class(CUSTOM.CORE.LateBinding.ImoPreferredTable).GroupInIndexExists(tMappingGroup,tInCode,tInDescription,tInCodingSystem)) 
+		{
+			// Find the existing one and update it
+			Set tImoRecord=##class(CUSTOM.CORE.LateBinding.ImoPreferredTable).GroupInIndexOpen(tMappingGroup,tInCode,tInDescription,tInCodingSystem)
+			
+			//Start - Setting Properties for Normalization Update Tool - NGL
+			If ((tImoRecord.OutCode '= tOutCode) || (tImoRecord.OutDescription '= tOutDescription) || (tImoRecord.OutCodingSystem '= tOutCodingSystem)||(tImoRecord.OutAlternateCode '= tOutAlternateCode) || (tImoRecord.OutAlternateDescription '= tOutAlternateDescription) || (tImoRecord.OutAlternateCodingSystem '= tOutAlternateSystem))
+			{
+				set tImoRecord.UpdateAnalytics = 1
+				set tImoRecord.LastUpdatedOn = $ZDT($H,3,1)
+  				Set pIsUpdated = 1
+
+			}
+			//End - Setting Properties for Normalization Update Tool
+			Set tImoRecord.OutCode=$P(pRecord,tDelim,5)
+			Set tImoRecord.OutDescription=$P(pRecord,tDelim,6)
+			Set tImoRecord.OutCodingSystem=$P(pRecord,tDelim,7)
+			Set tImoRecord.OutAlternateCode=tOutAlternateCode
+			Set tImoRecord.OutAlternateDescription=tOutAlternateDescription
+			Set tImoRecord.OutAlternateCodingSystem=tOutAlternateSystem
+
+			If (tImoRecord.OutCode=""&&(tImoRecord.OutDescription="")&&(tImoRecord.OutCodingSystem="")) $$$ThrowStatus($$$ERROR($$$GeneralError,"Could not save record with no output values. RecordLine: "_pRecord)) Quit
+		} Else{
+			//Create a new entry
+			Set tImoRecord=##class(CUSTOM.CORE.LateBinding.ImoPreferredTable).%New()
+			Set tImoRecord.MappingGroup=tMappingGroup
+			Set tImoRecord.InCode=tInCode
+			Set tImoRecord.InDescription=tInDescription
+			//Only store normalized coding systems
+			Set tImoRecord.InCodingSystem=##class(CUSTOM.CORE.LateBinding.XsltCallbackHelper).%New().StandardLookup(tInCodingSystem, "", "CODE_SYSTEM_NORM", "CodeSystem_Description", "NslijCodingSystem", "CODE_SYSTEM_NORM", "C")
+			Set tImoRecord.OutCode=tOutCode
+			Set tImoRecord.OutDescription=tOutDescription
+			Set tImoRecord.OutCodingSystem=tOutCodingSystem
+			Set tImoRecord.OutAlternateCode=tOutAlternateCode
+			Set tImoRecord.OutAlternateDescription=tOutAlternateDescription
+			Set tImoRecord.OutAlternateCodingSystem=tOutAlternateSystem
+			//Start - Setting Properties for Normalization Update Tool - NGL
+			set tImoRecord.UpdateAnalytics = 1
+			set tNow = $ZDT($H,3,1)
+			set tImoRecord.CreatedOn = tNow
+			set tImoRecord.LastUpdatedOn = tNow
+			//End - Setting Properties for Normalization Update Tool				
+
+			Set pIsUpdated = 1
+			
+			
+			If (tImoRecord.InCode=""&&(tImoRecord.InDescription="")&&(tImoRecord.InCodingSystem="")) $$$ThrowStatus($$$ERROR($$$GeneralError,"Could not save record with no input values. RecordLine: "_pRecord)) Quit
+			If (tImoRecord.OutCode=""&&(tImoRecord.OutDescription="")&&(tImoRecord.OutCodingSystem="")) $$$ThrowStatus($$$ERROR($$$GeneralError,"Could not save record with no output values. RecordLine: "_pRecord)) Quit
+		}
+		Set pTableRecord = tImoRecord
+	} catch (ex) {
+		set tSC = ex.AsStatus()
+	}
+	quit tSC
+}
+
+Method GetTableRecordIcd10ImoPreferred(pInText As %String, Output pTableRecord As %Library.Persistent, Output pIsUpdated As %Boolean) As %Status
+{
+	set tSC = $$$OK
+	try {
+		Set pTableRecord = $$$NULLOREF
+		Set pIsUpdated = 0
+		Set tDelim = ..delim
+
+		//layout: ICD10Code|ICD10Title|VocabularyCode|IMOCode|IMOPreferredCode|IMOPreferredDescription
+		Set tICD10Code 	 				= $ZStrip($P(pInText,tDelim,1),"<>WC")
+		Set tICD10Title 				= $ZStrip($P(pInText,tDelim,2),"<>WC")
+		Set tVocabularyCode				= $ZStrip($P(pInText,tDelim,3),"<>WC")
+		Set tIMOCode  					= $ZStrip($P(pInText,tDelim,4),"<>WC")
+		Set tIMOPreferredCode			= $ZStrip($P(pInText,tDelim,5),"<>WC")
+		Set tIMOPreferredDescription	= $ZStrip($P(pInText,tDelim,6),"<>WC")
+		
+		
+		#Dim tRecord as CUSTOM.CORE.LateBinding.Icd10ImoPreferredTable
+		
+		//see if row already exists by index
+		If (##class(CUSTOM.CORE.LateBinding.Icd10ImoPreferredTable).ICD10IMOPPKExists(tICD10Code)) 
+		{
+			// Find the existing one and update it
+			Set tRecord = ##class(CUSTOM.CORE.LateBinding.Icd10ImoPreferredTable).ICD10IMOPPKOpen(tICD10Code)
+			
+			//see if text has changed:
+			If ((tRecord.ICD10Title_tRecord.IMOCode_tRecord.IMOPreferredCode_tRecord.IMOPreferredDescription) '=
+				(tICD10Title_tIMOCode_tIMOPreferredCode_tIMOPreferredDescription))
+			{
+				//set tImoRecord.UpdateAnalytics = 1  **need for icd10 ?
+				Set tRecord.ICD10Title = tICD10Title
+				Set tRecord.IMOCode = tIMOCode
+				Set tRecord.IMOPreferredCode = tIMOPreferredCode
+				Set tRecord.IMOPreferredDescription = tIMOPreferredDescription
+				Set tRecord.VocabularyCode = tVocabularyCode
+				Set tRecord.LastUpdatedOn = $ZDT($H,3,1)
+				
+				Set pIsUpdated = 1
+			}
+
+		} Else{
+			//$$$LOGINFO("New ICD10: "_tICD10Code)
+			//Create a new entry
+			Set tRecord=##class(CUSTOM.CORE.LateBinding.Icd10ImoPreferredTable).%New()
+			//set tImoRecord.UpdateAnalytics = 1  **need for icd10 ?
+			Set tRecord.ICD10Code = tICD10Code
+			Set tRecord.ICD10Title = tICD10Title
+			Set tRecord.IMOCode = tIMOCode
+			Set tRecord.IMOPreferredCode = tIMOPreferredCode
+			Set tRecord.IMOPreferredDescription = tIMOPreferredDescription
+			Set tRecord.VocabularyCode = tVocabularyCode
+			Set tRecord.CreatedOn = $ZDT($H,3,1)
+			Set tRecord.LastUpdatedOn = tRecord.CreatedOn
+			
+			Set pIsUpdated = 1
+			
+		}
+		If ( (tRecord.IMOPreferredCode="") || (tRecord.IMOPreferredDescription="") ) 
+		{
+			//just log an errror, dont throw an exception which will abort the whole thing
+			$$$LOGERROR("Could not save ICD10 record with no output values for: "_tRecord.ICD10Code)
+		}
+		Else 
+		{
+			Set pTableRecord = tRecord
+		}
+	} catch (ex) {
+		set tSC = ex.AsStatus()
+	}
+	quit tSC
+}
+
+Method GetTableRecordIcd9ImoPreferred(pInText As %String, Output pTableRecord As %Library.Persistent, Output pIsUpdated As %Boolean) As %Status
+{
+	set tSC = $$$OK
+	try {
+		Set pTableRecord = $$$NULLOREF
+		Set pIsUpdated = 0
+		Set tDelim = ..delim
+
+		//layout: ICD9Code|ICD9Title|VocabularyCode|IMOCode|IMOPreferredCode|IMOPreferredDescription
+		Set tICD9Code 	 				= $ZStrip($P(pInText,tDelim,1),"<>WC")
+		Set tICD9Title 				= $ZStrip($P(pInText,tDelim,2),"<>WC")
+		Set tVocabularyCode				= $ZStrip($P(pInText,tDelim,3),"<>WC")
+		Set tIMOCode  					= $ZStrip($P(pInText,tDelim,4),"<>WC")
+		Set tIMOPreferredCode			= $ZStrip($P(pInText,tDelim,5),"<>WC")
+		Set tIMOPreferredDescription	= $ZStrip($P(pInText,tDelim,6),"<>WC")
+		
+		
+		#Dim tRecord as CUSTOM.CORE.LateBinding.Icd9ImoPreferredTable
+		
+		//see if row already exists by index
+		If (##class(CUSTOM.CORE.LateBinding.Icd9ImoPreferredTable).ICD9IMOPPKExists(tICD9Code)) 
+		{
+			// Find the existing one and update it
+			Set tRecord = ##class(CUSTOM.CORE.LateBinding.Icd9ImoPreferredTable).ICD9IMOPPKOpen(tICD9Code)
+			
+			//see if text has changed:
+			If ((tRecord.ICD9Title_tRecord.IMOCode_tRecord.IMOPreferredCode_tRecord.IMOPreferredDescription) '=
+				(tICD9Title_tIMOCode_tIMOPreferredCode_tIMOPreferredDescription))
+			{
+				//set tImoRecord.UpdateAnalytics = 1  **need for icd9 ?
+				Set tRecord.ICD9Title = tICD9Title
+				Set tRecord.IMOCode = tIMOCode
+				Set tRecord.IMOPreferredCode = tIMOPreferredCode
+				Set tRecord.IMOPreferredDescription = tIMOPreferredDescription
+				Set tRecord.VocabularyCode = tVocabularyCode
+				Set tRecord.LastUpdatedOn = $ZDT($H,3,1)
+				
+				Set pIsUpdated = 1
+			}
+
+		} Else{
+			//$$$LOGINFO("New ICD9: "_tICD9Code)
+			//Create a new entry
+			Set tRecord=##class(CUSTOM.CORE.LateBinding.Icd9ImoPreferredTable).%New()
+			//set tImoRecord.UpdateAnalytics = 1  **need for icd9 ?
+			Set tRecord.ICD9Code = tICD9Code
+			Set tRecord.ICD9Title = tICD9Title
+			Set tRecord.IMOCode = tIMOCode
+			Set tRecord.IMOPreferredCode = tIMOPreferredCode
+			Set tRecord.IMOPreferredDescription = tIMOPreferredDescription
+			Set tRecord.VocabularyCode = tVocabularyCode
+			Set tRecord.CreatedOn = $ZDT($H,3,1)
+			Set tRecord.LastUpdatedOn = tRecord.CreatedOn
+			
+			Set pIsUpdated = 1
+			
+		}
+		If ( (tRecord.IMOPreferredCode="") || (tRecord.IMOPreferredDescription="") ) 
+		{
+			$$$LOGERROR("Could not save ICD9 record with no output values for: "_tRecord.ICD9Code)
+			//$$$ThrowStatus($$$ERROR($$$GeneralError,"Could not save ICD9 record with no output values")) Quit
+		}
+		Else
+		{
+			Set pTableRecord = tRecord
+		}
+	} catch (ex) {
+		set tSC = ex.AsStatus()
+	}
+	quit tSC
+}
+
+Method HandleStreamContainer(pRequest As Ens.StreamContainer, Output pResponse As Ens.StringContainer) As %Status
+{
+	Set tSC = $$$OK
+	Set tTable = ""
+
+	Try 
+	{
+		Set tFirstLine = pRequest.Stream.ReadLine()
+		//set the table name
+		Set tTable = $Select($$$UPPER($ZSTRIP(tFirstLine,"<>W")) = $$$UPPER(..#ImoPreferredTableFileHeader):..#ImoPreferredTable,
+							 $$$UPPER($ZSTRIP(tFirstLine,"<>W")) = $$$UPPER(..#Icd10ImoPreferredTableFileHeader):..#Icd10ImoPreferredTable,
+							 $$$UPPER($ZSTRIP(tFirstLine,"<>W")) = $$$UPPER(..#Icd9ImoPreferredTableFileHeader):..#Icd9ImoPreferredTable,
+							 1:"")
+								
+		
+		Do pRequest.Stream.Rewind()
+		
+		if (tTable = "") {
+			$$$ThrowStatus($$$ERROR($$$GeneralError,"Unsupported IMO table/layout: "_pRequest.OriginalFilename_" / "_tFirstLine))
+		}
+
+			
+		set tSC = ..UpdateTableFromStream(pRequest.Stream, tTable, .pResponse)
+		$$$ThrowOnError(tSC)
+			
+ //		If (tTable = "ImoTable") {
+ //			set tSC = ..ForwardStream(pRequest)
+ //			if ($$$ISERR(tSC)) {
+ //				$$$ThrowStatus($$$ERROR($$$GeneralError,"Error sending ImoTable to target(s): "_$SYSTEM.Status.GetErrorText(tSC)))
+ //			}
+ //		}
+	} catch (ex) 
+	{
+		set tSC = ex.AsStatus()
+	}
+	quit tSC
+}
+
+/// Update the IMO normalization tables from stream
+Method UpdateTableFromStream(pInputStream As %Stream.Object, pTableName As %String, Output pResponse As Ens.StringContainer) As %Status
+{
+	Set tStatus=$$$OK
+	Try {
+		
+		/*
+		if ($Length(pTableName < 2) ) {
+			$$$ThrowStatus($$$ERROR($$$GeneralError,"Unsupported IMO table name: "_pTableName))
+		}
+		*/
+		
+		$$$LOGINFO("Updating table: "_pTableName)
+		
+		&sql(START TRANSACTION ISOLATION LEVEL READ COMMITTED)
+		
+		If tStatus'=$$$OK Set pResponse = ""
+			
+		Set tDelim=..delim
+		
+		do pInputStream.Rewind()
+		
+		//count the updates
+		Set tCount = 0 
+		// Skip header lines
+		Set tInHeader = 1
+		While ('pInputStream.AtEnd) {
+			Set tRecord=pInputStream.ReadLine()
+
+			// First line that doesn't start with #; is the header row.
+			// Everything after that is real content
+			If (tInHeader=1) {
+				$$$LOGINFO("Skipping header row: "_tRecord)
+				set tInHeader=0
+				continue
+			}
+			//lookup or generate a record. also set flag to see if we need to update
+			Set tSC = ..GetTableRecord(pTableName, tRecord, .tTableRecord, .tNeedsUpdate)
+			$$$ThrowOnError(tSC)
+			
+			If ($IsObject(tTableRecord) && tNeedsUpdate ) {
+				//$$$LOGINFO("Updating row: "_$Extract(tRecord,1,40)_"...")
+				Set tSC=tTableRecord.%Save()
+				If ($$$ISERR(tSC)) 
+				{
+					$$$ThrowStatus($$$ERROR($$$GeneralError,"Error Saving Record: "_$SYSTEM.Status.GetErrorText(tSC)))
+				}
+				Else 
+				{
+					Set tCount = tCount+1
+				}
+				
+				 
+			}
+		}
+	} Catch(ex) {
+		Set tStatus=ex.AsStatus()
+		$$$LOGERROR(tStatus)
+		&Sql(ROLLBACK)
+	}
+	If tStatus=$$$OK {
+		&Sql(COMMIT)
+		If (tCount > 0) {
+			$$$LOGINFO("Updated "_tCount_ " records.")
+		}
+		Else {
+				$$$LOGINFO("No updates required.")
+		}
+			
+		Set pResponse = ##class(Ens.StringContainer).%New("File successfully processed.")
+	}
+	
+	Quit tStatus
+}
+
+Storage Default
+{
+<Data name="ImoPreferredBusinessProcessDefaultData">
+<Subscript>"ImoPreferredBusinessProcess"</Subscript>
+<Value name="1">
+<Value>TargetConfigNames</Value>
+</Value>
+<Value name="2">
+<Value>delim</Value>
+</Value>
+</Data>
+<DefaultData>ImoPreferredBusinessProcessDefaultData</DefaultData>
+<Type>%Library.CacheStorage</Type>
+}
+
+}
