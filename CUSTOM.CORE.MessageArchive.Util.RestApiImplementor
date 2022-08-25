@@ -1,0 +1,113 @@
+Include Ensemble
+
+Class CUSTOM.CORE.MessageArchive.Util.RestApiImplementor Extends %RegisteredObject
+{
+
+Property HttpRequest As %Net.HttpRequest;
+
+Property HttpResponse As %Net.HttpResponse;
+
+Method %OnNew() As %Status
+{
+	Set ..HttpRequest=##class(%Net.HttpRequest).%New()
+	Set ..HttpRequest.SSLCheckServerIdentity=0
+	Quit $This
+}
+
+Method SetHeader(pHeaderName As %String, pHeaderValue As %String) As %ObjectHandle
+{
+	Do ..HttpRequest.SetHeader(pHeaderName,pHeaderValue)
+	Quit $This
+}
+
+Method SetContentType(pContentType As %String) As %ObjectHandle
+{
+	Set ..HttpRequest.ContentType=pContentType
+	Quit $This
+}
+
+Method SetSSLconfig(pSSLConfig As %String) As %ObjectHandle
+{
+	Set ..HttpRequest.SSLConfiguration=pSSLConfig
+	Quit $This
+}
+
+Method EnableHttps(pEnableHttps As %Boolean = 1) As %ObjectHandle
+{
+	Set ..HttpRequest.Https=pEnableHttps
+	Quit $This
+}
+
+Method SetRequestBody(pJsbody As %Stream.Object, pSecreatKey As %String = "") As %ObjectHandle
+{
+	If (pSecreatKey'=""){
+		
+		Set tEncryptedStream=##class(%GlobalCharacterStream).%New()
+		Do pJsbody.Rewind()
+		Set tIVValue=$SYSTEM.Encryption.GenCryptRand(16,1)
+		Set tStatus=$SYSTEM.Encryption.AESCBCEncryptStream(pJsbody,tEncryptedStream,pSecreatKey,tIVValue)
+		$$$ThrowOnError(tStatus)
+		Do pJsbody.Clear()
+		Do pJsbody.Write($SYSTEM.Encryption.Base64Encode(tEncryptedStream.Read($SYSTEM.SYS.MaxLocalLength())))
+		Do ..SetHeader("x-northwell-iv",$SYSTEM.Encryption.Base64Encode(tIVValue))
+	}
+	Do ..HttpRequest.EntityBody.CopyFrom(pJsbody)
+	$$$LOGINFO("Request Body: "_ ..HttpRequest.EntityBody.Read())
+	Quit $This
+}
+
+Method PostRequest(pUrl As %String) As %ObjectHandle
+{
+	Set tStatus=..HttpRequest.Post(pUrl)
+	$$$LOGINFO("APIM Url: "_ pUrl)
+	$$$ThrowOnError(tStatus)
+	Quit $This
+}
+
+Method PutRequest(pUrl As %String) As %ObjectHandle
+{
+	Set tStatus=..HttpRequest.Put(pUrl)
+	$$$LOGINFO("APIM Url: "_ pUrl)
+	$$$ThrowOnError(tStatus)
+	Quit $This
+}
+
+Method GetHttpResponse() As %ObjectHandle
+{
+	If $IsObject(..HttpRequest.HttpResponse){
+		Set ..HttpResponse=..HttpRequest.HttpResponse
+	}
+	Else{
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "Failed - Http Response Object not received."))
+	}
+	Quit $This
+}
+
+Method GetAesEncryptedReqBodyInStream(pStreamToEncrypt As %Stream.Object, Output pEncryptedStream As %Stream.Object, pSecreatKey As %String, pIVValue As %String) As %Status
+{
+	Set tStatus=$System.Status.OK()
+	
+	Quit tStatus
+}
+
+ClassMethod Get()
+{
+	Set t=##class(%GlobalCharacterStream).%New()
+	Set t1=##class(%GlobalCharacterStream).%New()
+
+	D t1.Write("sdadsadsad12345678910123456789101234567890")
+	//Do ..GetAesEncryptedReqBodyInStream(t1,.t)
+	set iv=$SYSTEM.Encryption.GenCryptRand(16,1)
+	
+	Set tTextToEncrypt=$SYSTEM.Encryption.AESCBCEncryptStream(t1,t,"12345678910123456789101234567890",iv)
+	
+	Set l= $SYSTEM.Encryption.Base64Encode(t.Read())
+	b
+	
+	Set text=$SYSTEM.Encryption.Base64Decode(l)
+	Set text=$SYSTEM.Encryption.AESCBCDecrypt(text,"12345678910123456789101234567890",iv)
+	//Set plaintext=$ZCONVERT(text,"I","UTF8")
+	b
+}
+
+}
