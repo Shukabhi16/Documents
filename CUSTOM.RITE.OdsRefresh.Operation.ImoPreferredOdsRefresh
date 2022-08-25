@@ -1,0 +1,134 @@
+Class CUSTOM.RITE.OdsRefresh.Operation.ImoPreferredOdsRefresh Extends (Ens.BusinessOperation, Ens.Util.FunctionSet)
+{
+
+Parameter ADAPTER = "EnsLib.SQL.OutboundAdapter";
+
+Parameter INVOCATION = "Queue";
+
+Property BatchConfiguration As %String [ InitialExpression = "1000" ];
+
+/// Additional Settings 
+Parameter SETTINGS = "BatchConfiguration";
+
+/// Query Analytics Hsaa Patient table and CUSTOM_ANALYTICS_Normalized.Diagnosis View
+Method QueryAnalytics(pRequest As CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest, Output pResponse As CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshResponse) As %Status
+{
+	$$$TRACE("Inside QueryAnalytics - SessionID = " _ ..%SessionId)
+	
+	s tInCode = pRequest.InCode
+	s tInDescription = pRequest.InDescription
+			
+	Set pResponse = ##class(CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshResponse).%New()
+	Set tStatus=$$$OK
+
+	Try {  
+		#Dim tRS As EnsLib.SQL.GatewayResultSet	
+		
+		Set tInDescription = $REPLACE(tInDescription,"'","''")
+					
+		If (tInDescription '= "") { 
+			/*
+			Select query for updated Imopreferred codes in Analytics CUSTOM_ANALYTICS_Normalized.Diagnosis View
+    		*/
+    		Set tQuery = "SELECT DISTINCT p.MPIID As Patients FROM  HSAA.Patient p INNER JOIN HSAA.Diagnosis d On p.ID = d.Patient Where d.Diagnosis_Description = '"_tInDescription_"'"
+		}
+		Else {
+			; Select query for updated Icd9Imopreferred and Icd10Imopreferred codes in Analytics CUSTOM_ANALYTICS_Normalized.Diagnosis View
+			Set tQuery = "SELECT DISTINCT p.MPIID As Patients FROM  HSAA.Patient p INNER JOIN HSAA.Diagnosis d On p.ID = d.Patient Where d.Diagnosis_Code = '"_tInCode_"'"
+			
+		}
+		
+  		Set tHsaaQueryStartTime = $ZDT($H,3,1)
+  		
+  		Set MPIIDList = ""
+  		Set MPIIDCount= 0
+  		Set BatchCount = 0
+  		 
+		$$$TRACE("Analytics Query = " _ tQuery)
+		
+		Set tStatus = ..Adapter.ExecuteQuery(.tRS, tQuery)
+	
+		If $$$ISERR(tStatus) {
+			$$$TRACE("tStatus Error is: " _ tStatus)
+			return tStatus
+		}
+		Else {
+			WHILE (tRS.%Next()) {
+				Set MPIIDList = MPIIDList_","_tRS.Get("Patients")
+				Set MPIIDCount= MPIIDCount+1
+				Set BatchCount = BatchCount+1
+				
+				//Release Batch once BatchCount is same as Configured batch count
+				If (BatchCount = ..BatchConfiguration ) {
+					Set pBatchgRequest = ##class(CUSTOM.RITE.OdsRefresh.Message.OdsRefreshPatientListRequest).%New()
+					Set pBatchgRequest.MPIID = $ZSTRIP(MPIIDList,"<",",")
+					Set pBatchgRequest.MatchCount = BatchCount
+					Do ..SendRequestSync("OdsRefreshPatientListOperation",pBatchgRequest,.tOdsRefreshPatientListResponse)
+					$$$LOGINFO("List of MPIIDs in Batch: "_pBatchgRequest.MPIID)
+					Set BatchCount = 0
+					Set MPIIDList = ""					
+				}
+			}			
+		}
+		//Release Batch if BatchCount is less than Configured batch count
+		If (BatchCount < ..BatchConfiguration) {
+			Set pBatchgRequest = ##class(CUSTOM.RITE.OdsRefresh.Message.OdsRefreshPatientListRequest).%New()
+			Set pBatchgRequest.MPIID = $ZSTRIP(MPIIDList,"<",",")
+			Set pBatchgRequest.MatchCount = BatchCount
+			Do ..SendRequestSync("OdsRefreshPatientListOperation",pBatchgRequest,.tOdsRefreshPatientListResponse)
+			$$$LOGINFO("List of MPIIDs in Batch: "_pBatchgRequest.MPIID)				
+		}
+		
+		Set pResponse.MatchCount = MPIIDCount
+		
+		s tHsaaQueryEndTime = $ZDT($H,3,1)
+		
+		s tStatus = ..CreateMetricsEntry(pRequest, tQuery, tHsaaQueryStartTime, tHsaaQueryEndTime, pResponse)
+		
+	}
+	
+	Catch (ex) {
+		Set tStatus = ex.AsStatus()
+		$$$LOGERROR($SYSTEM.Status.GetErrorText(tStatus))
+	}
+
+	Quit tStatus
+}
+
+Method CreateMetricsEntry(pRequest As CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest, tQuery As %String, tHsaaQueryStartTime As %String, tHsaaQueryEndTime As %String, pResponse As CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshResponse) As %Status
+{
+	; Create OdsRefreshMetrics 
+	s tOdsRefreshMetrics = ##class(CUSTOM.RITE.OdsRefresh.Metrics.OdsRefreshMetrics).%New()
+	
+	s tOdsRefreshMetrics.SessionID = ..%SessionId
+	If $IsObject(pRequest.InCode){
+		s tOdsRefreshMetrics.InCode = pRequest.InCode
+	}Else{
+		s tOdsRefreshMetrics.InDescription = pRequest.InDescription
+	}
+	s tOdsRefreshMetrics.HsaaQuery = tQuery
+	s tOdsRefreshMetrics.HsaaMatchCount = pResponse.MatchCount
+	s tOdsRefreshMetrics.HsaaQueryStartTime = tHsaaQueryStartTime
+	s tOdsRefreshMetrics.HsaaQueryEndTime = tHsaaQueryEndTime
+	
+	If tOdsRefreshMetrics.HsaaMatchCount = "0" {
+		s tOdsRefreshMetrics.OdsMatchCount = "0"
+		s tOdsRefreshMetrics.OdsQueryStartTime = "N/A"
+		s tOdsRefreshMetrics.OdsQueryEndTime = "N/A"
+	}
+	
+	s tStatus = tOdsRefreshMetrics.%Save()
+	
+	Quit tStatus
+}
+
+XData MessageMap
+{
+<MapItems>
+	<MapItem MessageType="CUSTOM.RITE.OdsRefresh.Message.ImoPreferredOdsRefreshRequest"> 
+		<Method>QueryAnalytics</Method>
+	</MapItem>
+</MapItems>
+}
+
+}
