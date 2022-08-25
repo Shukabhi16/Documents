@@ -1,0 +1,440 @@
+Class CUSTOM.POSTROUTER.MessageArchive.Operation.SplitterWebApiOperation Extends Ens.BusinessOperation
+{
+
+Parameter ADAPTER = "EnsLib.HTTP.OutboundAdapter";
+
+Property Adapter As EnsLib.HTTP.OutboundAdapter;
+
+Parameter INVOCATION = "Queue";
+
+Property HL7Message As EnsLib.HL7.Message;
+
+XData MessageMap
+{
+<MapItems>
+  <MapItem MessageType="EnsLib.HL7.Message">
+    <Method>ProcessRequest</Method>
+  </MapItem>
+</MapItems>
+}
+
+Method ProcessRequest(pRequest As Ens.Request, Output pResponse As CUSTOM.CORE.MessageArchive.Message.Response) As %Status
+{
+		Set tSC=$$$OK
+	Try {
+		//Create Containers Header
+		Set tSC=$$$OK
+		Set ..HL7Message = pRequest
+		Set tFields = ##class(CUSTOM.CORE.MessageArchive.Message.Container).%New()
+		Set tFields.HL7Header = ..%RequestHeader
+		Set tFields.id = "POSTROUTER_"_..%RequestHeader.%Id()
+		//Seperate name in First name, middle name and surname for search.
+		Set tNameObj = ##class(CUSTOM.CORE.MessageArchive.Message.PatientName).%New()
+		Set tNameObj.FirstName = $P(..GetName(),..HL7Message.CS,2)
+		Set tNameObj.MiddleName= $P(..GetName(),..HL7Message.CS,3)
+		Set tNameObj.GivenName = $P(..GetName(),..HL7Message.CS)
+		Set tFields.PatientName = tNameObj
+		Set tFields.MSH7 = pRequest.GetValueAt("MSH:7")
+		Set tMRNObj = ##class(CUSTOM.CORE.MessageArchive.Message.PatientIdentifier).%New()
+		Set tMRNObj.MRN = $P(..GetMrn(),":",1)
+		Set tMRNObj.AssigningAuth = $P(..GetMrn(),":",2)
+		Set tMRNObj.EPIID = ..GetEPI()
+		Set tMRNObj.HSPIID= ..GetMPIID()
+		Do tFields.PatientIdentifier.Insert(tMRNObj)
+		Set tFields.PatientAccNumber = ..GetAccNumber()
+		If ..HL7Message.GetValueAt("MSH:9.2") = "A17"
+			{
+			//Seperate name in First name, middle name and surname for search.
+			Set tNameObji2 = ##class(CUSTOM.CORE.MessageArchive.Message.PatientName).%New()
+			Set tNameObji2.FirstName = $P(..GetNamePIDi2(),..HL7Message.CS,2)
+			Set tNameObji2.MiddleName= $P(..GetNamePIDi2(),..HL7Message.CS,3)
+			Set tNameObji2.GivenName = $P(..GetNamePIDi2(),..HL7Message.CS)
+			Set tFields.PatientNameI2= tNameObji2
+			Set tMRNObj2 = ##class(CUSTOM.CORE.MessageArchive.Message.PatientIdentifier).%New()
+			Set tMRNObj2.MRN = $P(..GetMrnPIDi2(),":",1)
+			Set tMRNObj2.AssigningAuth = $P(..GetMrnPIDi2(),":",2)
+			Set tMRNObj2.EPIID = ..GetEPIi2()
+			Set tMRNObj2.HSPIID = ..GetMPIIDi2()
+			Do tFields.PatientIdentifierI2.Insert(tMRNObj2) 
+			Set tFields.PatientAccNumberI2=..GetAccNumberPIDi2()
+			}
+		//To Create HL7Body
+		Set tFields.Source = pRequest.Source
+		Set tFields.DocType = pRequest.DocType
+		Set tFields.Name = pRequest.Name
+		Set tFields.Identifier= pRequest.Identifier
+		Set tFields.RawContent = pRequest.RawContent
+		If (..HL7Message.GetValueAt("MSH:9.1")="ORU")||(..HL7Message.GetValueAt("MSH:9.1")="ORM")
+		{
+			set tFields.OBR4= ..GetOBR4()	
+		}
+		Set tFields.DateTimeISO= $REPLACE(..%RequestHeader.TimeCreated," ","T")_"Z"
+		
+		//Coverting HL7 Object to Json Object
+		Do ##class(%ZEN.Auxiliary.jsonProvider).%WriteJSONStreamFromObject(.tJsonObj,.tFields,,,,"iw")
+		//POst Splitter C# Web API
+		Set tDate = "" Set tAuth=""
+		Set tHttpRequest = ##class(%Net.HttpRequest).%New()
+		Set tHttpRequest.ContentType= "application/json"
+	    //Set tHttpRequest.SSLConfiguration="ssl_generic"
+	    Do tHttpRequest.EntityBody.CopyFrom(tJsonObj)
+	    //Set tHttpRequest.Https=1
+	    //$$$LOGINFO(tHttpRequest.EntityBody.Read()) //Log Json Object
+	    $$$THROWONERROR(tsc,tHttpRequest.Post(..Adapter.URL))
+		If $IsObject(tHttpRequest.HttpResponse) {
+				Set pResponse =##Class(CUSTOM.CORE.MessageArchive.Message.Response).%New()
+				Do pResponse.RawResponse.CopyFrom(tHttpRequest.HttpResponse.Data)  
+				Do tHttpRequest.HttpResponse.Data.Rewind()
+				Set pResponse.Status=$Replace(tHttpRequest.HttpResponse.StatusLine,"HTTP/1.1 ","")
+				//Log response from Splitter C# Web API
+				
+				if pResponse.Status = "200 OK"{
+				$$$LOGINFO("Status:"_pResponse.Status_$C(13,10)_"Response message:"_pResponse.RawResponse.Read())	
+				}else{
+				$$$LOGERROR("Status:"_pResponse.Status_$C(13,10)_"Response message:"_pResponse.RawResponse.Read())
+				}
+				
+			}
+	
+	}Catch (ex) {
+		$$$LOGERROR("Could not request url with error message: " _$SYSTEM.Status.GetErrorText(ex.AsStatus()))
+		}
+		QUIT tSC
+}
+
+Method GetMrn() As %String
+{
+	Set tMRN=""
+	Set NextIndex=""
+	Set HasPIDGrp=0
+	Set HasPIDRepGrp=0
+	Set HasPIDGrpGrp=0
+	Set MsgDocType = ..HL7Message.DocType
+	Set DocTypeCategory =$P(MsgDocType,":")
+	Set DocTypeName =$P(MsgDocType,":",2)
+	Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	WHILE NextIndex'=""{
+		If (NextIndex["PIDgrp"){
+			Set HasPIDGrp= 1
+		}
+		If (NextIndex["PIDgrp()"){
+			Set HasPIDRepGrp= 1
+		}
+		If (NextIndex["PIDgrpgrp()"){
+			Set HasPIDGrpGrp= 1
+		}
+		Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	}                                 
+	If (HasPIDGrp=1)&&(HasPIDRepGrp=0)&&(HasPIDGrpGrp=0)
+	{
+		If $L(..HL7Message.GetValueAt("PIDgrp.PID:3"),"~")>1
+		{
+	For k=1:1:$L(..HL7Message.GetValueAt("PIDgrp.PID:3"),"~"){
+		     If (..HL7Message.GetValueAt("PIDgrp.PID:3("_k_").5")="MR")||(..HL7Message.GetValueAt("PIDgrp.PID:3("_k_").5")="MRN"){
+			     Set tMRN=..HL7Message.GetValueAt("PIDgrp.PID:3("_k_").1")_":"_..HL7Message.GetValueAt("PIDgrp.PID:3("_k_").4")
+			 }
+		  }
+		}Else{
+			Set tMRN=..HL7Message.GetValueAt("PIDgrp.PID:3.1")_":"_..HL7Message.GetValueAt("PIDgrp.PID:3.4")
+		}
+		
+	Q tMRN
+	}
+	Elseif HasPIDRepGrp=1
+	{
+		If $L(..HL7Message.GetValueAt("PIDgrp(1).PID:3"),"~")>1
+		{
+		For k=1:1:$L(..HL7Message.GetValueAt("PIDgrp(1).PID:3"),"~"){
+		     If (..HL7Message.GetValueAt("PIDgrp(1).PID:3("_k_").5")="MR")||(..HL7Message.GetValueAt("PIDgrp(1).PID:3("_k_").5")="MRN"){
+			     Set tMRN=..HL7Message.GetValueAt("PIDgrp(1).PID:3("_k_").1")_":"_..HL7Message.GetValueAt("PIDgrp(1).PID:3("_k_").4")
+			 }
+		  }
+		 }Else{
+			Set tMRN=..HL7Message.GetValueAt("PIDgrp(1).PID:3.1")_":"_..HL7Message.GetValueAt("PIDgrp(1).PID:3.4")
+		}
+	Q tMRN
+	}
+	Elseif HasPIDGrpGrp=1
+	{
+		If $L(..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3"),"~")>1
+		{
+		For k=1:1:$L(..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3"),"~"){
+		     If (..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3("_k_").5")="MR")||(..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3("_k_").5")="MRN"){
+			     Set tMRN=..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3("_k_").1")_":"_..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3("_k_").4")
+			 }
+		  }
+		 }Else{
+			Set tMRN=..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3.1")_":"_..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:3.4")
+		}
+	Q tMRN
+	}
+	Else
+	{
+		If $L(..HL7Message.GetValueAt("PID:3"),"~")>1
+		{
+		For k=1:1:$L(..HL7Message.GetValueAt("PID:3"),"~"){
+		     If (..HL7Message.GetValueAt("PID:3("_k_").5")="MR")||(..HL7Message.GetValueAt("PID:3("_k_").5")="MRN"){
+			     Set tMRN=..HL7Message.GetValueAt("PID:3("_k_").1")_":"_..HL7Message.GetValueAt("PID:3("_k_").4")
+			 }
+		  }
+		 }Else{
+			Set tMRN=..HL7Message.GetValueAt("PID:3.1")_":"_..HL7Message.GetValueAt("PID:3.4")
+		}
+	Q tMRN
+	}
+}
+
+Method GetMrnPIDi2() As %String
+{
+	Set tMRNPIDi2=""
+	If $L(..HL7Message.GetValueAt("PIDi2:3"),"~")>1
+		{
+		For k=1:1:$L(..HL7Message.GetValueAt("PIDi2:3"),"~"){
+		     If (..HL7Message.GetValueAt("PIDi2:3("_k_").5")="MR")||(..HL7Message.GetValueAt("PIDi2:3("_k_").5")="MRN"){
+			     Set tMRNPIDi2=..HL7Message.GetValueAt("PIDi2:3("_k_").1")_":"_..HL7Message.GetValueAt("PIDi2:3("_k_").4")
+			 }
+		  }
+		 }Else{
+			Set tMRNPIDi2=..HL7Message.GetValueAt("PIDi2:3.1")_":"_..HL7Message.GetValueAt("PIDi2:3.4")
+		}
+	Q tMRNPIDi2
+}
+
+Method GetEPI() As %String
+{
+	Set tEPI=""
+	Set NextIndex=""
+	Set HasPIDGrp=0
+	Set HasPIDRepGrp=0
+	Set HasPIDGrpGrp=0
+	Set MsgDocType = ..HL7Message.DocType
+	Set DocTypeCategory =$P(MsgDocType,":")
+	Set DocTypeName =$P(MsgDocType,":",2)
+	Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	WHILE NextIndex'=""{
+		If (NextIndex["PIDgrp"){
+			Set HasPIDGrp= 1
+		}
+		If (NextIndex["PIDgrp()"){
+			Set HasPIDRepGrp= 1
+		}
+		If (NextIndex["PIDgrpgrp()"){
+			Set HasPIDGrpGrp= 1
+		}
+		Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	}
+	If (HasPIDGrp=1)&&('HasPIDRepGrp)&&('HasPIDGrpGrp)
+	{
+		Set tEPI=..HL7Message.GetValueAt("PIDgrp.PID:2")
+		Q tEPI
+	}
+	Elseif HasPIDRepGrp=1
+	{
+		Set tEPI=..HL7Message.GetValueAt("PIDgrp(1).PID:2")
+		Q tEPI
+	}
+	Elseif HasPIDGrpGrp=1
+	{
+		Set tEPI=..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:2")
+		Q tEPI
+	}
+	Else
+	{
+		Set tEPI=..HL7Message.GetValueAt("PID:2")
+		Q tEPI
+	}
+}
+
+Method GetEPIi2() As %String
+{
+	Q ..HL7Message.GetValueAt("PIDi2:2")
+}
+
+Method GetMPIID() As %String
+{
+	Set tMPIID=""
+	Set NextIndex=""
+	Set HasPIDGrp=0
+	Set HasPIDRepGrp=0
+	Set HasPIDGrpGrp=0
+	Set MsgDocType = ..HL7Message.DocType
+	Set DocTypeCategory =$P(MsgDocType,":")
+	Set DocTypeName =$P(MsgDocType,":",2)
+	Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	WHILE NextIndex'=""{
+		If (NextIndex["PIDgrp"){
+			Set HasPIDGrp= 1
+		}
+		If (NextIndex["PIDgrp()"){
+			Set HasPIDRepGrp= 1
+		}
+		If (NextIndex["PIDgrpgrp()"){
+			Set HasPIDGrpGrp= 1
+		}
+		Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	}
+	If (HasPIDGrp=1)&&('HasPIDRepGrp)&&('HasPIDGrpGrp)
+	{
+		Set tMPIID=..HL7Message.GetValueAt("PIDgrp.PID:4")
+		Q tMPIID
+	}
+	Elseif HasPIDRepGrp=1
+	{
+		Set tMPIID=..HL7Message.GetValueAt("PIDgrp(1).PID:4")
+		Q tMPIID
+	}
+	Elseif HasPIDGrpGrp=1
+	{
+		Set tMPIID=..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:4")
+		Q tMPIID
+	}
+	Else
+	{
+		Set tMPIID=..HL7Message.GetValueAt("PID:4")
+		Q tMPIID
+	}
+}
+
+Method GetMPIIDi2() As %String
+{
+	Q ..HL7Message.GetValueAt("PIDi2:4")
+}
+
+Method GetName() As %String
+{
+	Set NextIndex=""
+	Set HasPIDGrp=0
+	Set HasPIDRepGrp=0
+	Set HasPIDGrpGrp=0
+	Set MsgDocType = ..HL7Message.DocType
+	Set DocTypeCategory =$P(MsgDocType,":")
+	Set DocTypeName =$P(MsgDocType,":",2)
+	Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	WHILE NextIndex'=""{
+		If (NextIndex["PIDgrp"){
+			Set HasPIDGrp= 1
+		}
+		If (NextIndex["PIDgrp()"){
+			Set HasPIDRepGrp= 1
+		}
+		If (NextIndex["PIDgrpgrp()"){
+			Set HasPIDGrpGrp= 1
+		}
+		Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	}
+	If (HasPIDGrp=1)&&('HasPIDRepGrp)&&('HasPIDGrpGrp)
+	{
+	Q ..HL7Message.GetValueAt("PIDgrp.PID:5")
+	}
+	Elseif HasPIDRepGrp=1
+	{
+		Q ..HL7Message.GetValueAt("PIDgrp(1).PID:5")
+	}
+	Elseif HasPIDGrpGrp=1
+	{
+		Q ..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:5")
+	}
+	Else
+	{
+		Q ..HL7Message.GetValueAt("PID:5")
+	}
+}
+
+Method GetNamePIDi2() As %String
+{
+	Q ..HL7Message.GetValueAt("PIDi2:5")
+}
+
+Method GetAccNumber() As %String
+{
+	Set NextIndex=""
+	Set HasPIDGrp=0
+	Set HasPIDRepGrp=0
+	Set HasPIDGrpGrp=0
+	Set MsgDocType = ..HL7Message.DocType
+	Set DocTypeCategory =$P(MsgDocType,":")
+	Set DocTypeName =$P(MsgDocType,":",2)
+	Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	WHILE NextIndex'=""{
+		If (NextIndex["PIDgrp"){
+			Set HasPIDGrp= 1
+		}
+		If (NextIndex["PIDgrp()"){
+			Set HasPIDRepGrp= 1
+		}
+		If (NextIndex["PIDgrpgrp()"){
+			Set HasPIDGrpGrp= 1
+		}
+		Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	}
+	If (HasPIDGrp=1)&&('HasPIDGrpGrp)&&('HasPIDGrpGrp)
+	{
+	Q ..HL7Message.GetValueAt("PIDgrp.PID:18.1")
+	}
+	Elseif HasPIDRepGrp=1
+	{
+		Q ..HL7Message.GetValueAt("PIDgrp(1).PID:18.1")
+	}
+	Elseif HasPIDGrpGrp=1
+	{
+		Q ..HL7Message.GetValueAt("PIDgrpgrp(1).PIDgrp.PID:18.1")
+	}
+	Else
+	{
+		Q ..HL7Message.GetValueAt("PID:18.1")
+	}
+}
+
+Method GetAccNumberPIDi2() As %String
+{
+	Q ..HL7Message.GetValueAt("PIDi2:18.1")
+}
+
+Method GetOBR4() As %String
+{
+	Set NextIndex=""
+	Set HasPIDGrpGrp=0
+	Set HasOBRGrp = 0
+	Set HasORCGrp = 0
+	Set MsgDocType = ..HL7Message.DocType
+	Set DocTypeCategory =$P(MsgDocType,":")
+	Set DocTypeName =$P(MsgDocType,":",2)
+	Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	WHILE NextIndex'=""{
+		If (NextIndex["PIDgrpgrp().ORCgrp()"){
+			Set HasPIDGrpGrp= 1
+		}
+		If (NextIndex["ORCgrp()"){
+			Set HasORCGrp= 1
+		}
+		If (NextIndex["OBRgrp()"){
+			Set HasOBRGrp= 1
+		}
+		Set NextIndex= $Order(^EnsHL7.Schema(DocTypeCategory,"MS",DocTypeName,"map",NextIndex))
+	}
+	If HasPIDGrpGrp=1
+	{
+	Q ..HL7Message.GetValueAt("PIDgrpgrp(1).ORCgrp(1).OBR:4")
+	}
+	Elseif (HasORCGrp=1)&&(HasPIDGrpGrp=0)
+	{
+		Q ..HL7Message.GetValueAt("ORCgrp(1).OBR:4")
+	}
+	Elseif HasOBRGrp=1
+	{
+		Q ..HL7Message.GetValueAt("OBRgrp(1).OBR:4")
+	}
+	Else
+	{
+		Q ..HL7Message.GetValueAt("OBR:4")
+	}
+}
+
+/*
+Method GetDateTimeFormat() As %String
+{
+	Set DTStamp = ..HL7Message.GetValueAt("MSH:7")
+	Set DTStamp= $ZSTRIP(($E(DTStamp,1,4)_"-"_$E(DTStamp,5,6)_"-"_$E(DTStamp,7,8)_" "_$E(DTStamp,9,10)_":"_$E(DTStamp,11,12)_":"_$E(DTStamp,13,*)),">P")
+	Q DTStamp
+}*/
+}
