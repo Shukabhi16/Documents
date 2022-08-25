@@ -1,0 +1,2943 @@
+Include (HS.Gateway.HL7.HL7ToSDA3, CUSTOM.Gateway.HL7.HL7ToSDA3, HS.Common)
+
+/// Convert an HL7 message into SDA XML
+Class CUSTOM.CORE.HL7.HL7ToSDA3 Extends (HS.Gateway.HL7.HL7ToSDA3, %RegisteredObject) [ Not ProcedureBlock ]
+{
+
+Parameter HSDEPLOY = 1;
+
+ClassMethod SendingSystem()
+{
+	Do ..write(cr_"<CustomPairs>")
+	Do ..write(cr_"<NVPair>")
+	Do ..write(cr_"<Name>"_"Sending System"_"</Name>")
+	Do ..write(cr_"<Value>"_$$$xml($g(^||HS.Data(^||HS.Data("MSH"),3,1)))_"_"_$$$MSHSendingFacilityNamespaceID_"</Value>")
+	Do ..write(cr_"</NVPair>")
+	Do ..write(cr_"</CustomPairs>")
+}
+
+ClassMethod SendingSystemWithHealthixConsent()
+{
+	Set tConsentValues= ..VerifyHealthixConsent()
+	Do ..write(cr_"<CustomPairs>")
+	Do ..write(cr_"<NVPair>")
+	Do ..write(cr_"<Name>"_"Sending System"_"</Name>")
+	Do ..write(cr_"<Value>"_$$$xml($g(^||HS.Data(^||HS.Data("MSH"),3,1)))_"_"_$$$MSHSendingFacilityNamespaceID_"</Value>")
+	Do ..write(cr_"</NVPair>")
+	Do ..write(cr_"<NVPair>")
+	Do ..write(cr_"<Name>"_"Healthix Consent"_"</Name>")
+	// Do ..write(cr_"<Value>"_$$$xml($P(tConsentValues,"|",1))_"</Value>")
+	Do ..write(cr_"<Value>"_$$$xml($g(^||HS.Data(^||HS.Data("MSH"),21,1)))_"</Value>")
+	Do ..write(cr_"</NVPair>")
+	Do ..write(cr_"<NVPair>")
+	Do ..write(cr_"<Name>"_"Healthix Consent Effective Date"_"</Name>")
+	//Do ..write(cr_"<Value>"_$$$xml($P(tConsentValues,"|",2))_"</Value>")
+	Do ..write(cr_"<Value>"_$$$xml($g(^||HS.Data(^||HS.Data("MSH"),21,2)))_"</Value>")
+	Do ..write(cr_"</NVPair>")
+	Do ..write(cr_"</CustomPairs>")
+}
+
+// Method to handle Sexual Orientation and Gender Identity values (found in ADT OBXs but to be stored in Patient level)
+
+ClassMethod SOGI()
+{
+	// initialize SOGI flag
+	Set SOGI = ""
+	Kill SOGIData
+	While $$$Next("OBX") {Do ..GetSOGIData(.SOGIData)}
+	// BirthGender goes directly into Patient section (not in SOGI section)
+	If $Data(SOGIData("BirthGender")) {
+		Set tag="BirthGender"
+		do ..write(cr_"<"_tag_">")
+		do ..write(cr_"<Code>"_SOGIData(tag,"Code")_"</Code>")
+		do ..write(cr_"<Description>"_SOGIData(tag,"Desc")_"</Description>")
+		do ..write(cr_"<SDACodingStandard>"_$$$MSHSendingFacilityNamespaceID_"</SDACodingStandard>")
+		do ..write(cr_"</"_tag_">")
+		Kill SOGIData("BirthGender")
+	}
+	// Initialize last processed value so that Obx's get processed again later (for non-SOGI data)
+	Set ^||HS.Data("OBX")=0
+	Quit
+}
+
+ClassMethod GetSOGIData(ByRef SOGIData)
+{
+	$$$Find("OBX")
+	If $$$OBXObservationSubID="SOGI" {
+		// OBX:3-1
+		Set tObsIdId = $$$OBXObservationIdentifierIdentifier(s)
+				Set tag = $Select(	tObsIdId="PtBirthSex":"BirthGender",
+							tObsIdId="PtPreferPronoun":"PreferredPronoun",
+							tObsIdId="PtSexualOrientation":"SexualOrientation",
+							tObsIdId="PtGenderIdentity":"GenderIdentity",
+							1:"") 
+		If tag'="" {
+			// OBX:5-1 (code)
+			Set SOGIData(tag,"Code")=$$$OBXObservationValues
+			// OBX:5-2 (description)
+			Set SOGIData(tag,"Desc")=$$$OBXObservationText
+		}
+	}
+}
+
+ClassMethod SetSOGIData(ByRef SOGIData)
+{
+	do ..write(cr_"<SOGI>")
+	Set tag=""
+	For {
+		Set tag=$Order(SOGIData(tag))
+		Quit:tag=""
+		If tag'="BirthGender" {
+			do ..write(cr_"<"_tag_">")
+			do ..write(cr_"<Code>"_SOGIData(tag,"Code")_"</Code>")
+			do ..write(cr_"<Description>"_SOGIData(tag,"Desc")_"</Description>")
+			do ..write(cr_"<SDACodingStandard>"_$$$MSHSendingFacilityNamespaceID_"</SDACodingStandard>")
+			do ..write(cr_"</"_tag_">")
+		}
+	}
+	do ..write(cr_"</SOGI>")
+}
+
+ClassMethod ProcessOBXSegmentsFromORM()
+{
+	Kill tObxData
+	
+	While $$$Next("OBX") {Do ..GetObxData(.tObxData, "ORM")}
+	
+	If $Data(tObxData) {Do ..SetObxData(.tObxData)}
+	
+	Quit
+}
+
+ClassMethod GetObxData(ByRef pObxData, pHL7MessageType As %String = "", pHL7EventType As %String = "")
+{
+	$$$Find("OBX")
+	
+	If (($$$OBXObservationSubID = "REF") && (pHL7MessageType = "ORM")) {
+		Set tObsCode = $ZCVT($$$OBXObservationIdentifierIdentifier(s),"U")
+		Set tObsCode = $Select(	tObsCode="ENCOUNTERNUMBER":"EncounterNumber",
+								tObsCode="PLACERID":"PlacerId",
+								tObsCode="REFERREDTOPROVIDER":"ReferredToProvider",
+								tObsCode="REFERRALREASON":"ReferralReason",
+								1:"") 
+							
+		If (tObsCode '= "") {
+			Set pObxData("Referral", tObsCode, "Value") = $$$OBXObservationValues
+		}
+	}
+}
+
+ClassMethod SetObxData(ByRef pObxData)
+{
+	Set tTag = ""
+	
+	For {
+		Set tTag = 	$Order(pObxData(tTag))
+		
+		Quit:(tTag = "")
+		
+		If (tTag = "Referral") {
+			do ..write(cr_"<Referrals>")
+			do ..write(cr_"<Referral>")
+			
+			Set tField = ""
+			
+			For {
+				Set tField = $Order(pObxData("Referral", tField))
+				
+				Quit:(tField = "")
+				
+				Set tValue = pObxData("Referral", tField, "Value")
+				
+				Continue:(tValue = "")
+				
+				If (tField = "ReferredToProvider") {
+					Set tCode = $P(tValue,s5,1)
+					Set tFamilyName = $P(tValue,s5,2)
+					Set tGivenName = $P(tValue,s5,3)
+					Set tCodingSystem = $P(tValue,s5,4)
+					
+					Continue:((tCode = "") && (..formatname(tFamilyName, tGivenName) = ""))
+					
+					do ..By("<"_tField_">", 1, "CareProvider", tCodingSystem, tCode, tFamilyName, tGivenName)
+				} Else {				
+					do ..write(cr_"<"_tField_">"_tValue_"</"_tField_">")
+				}
+			}			
+			
+			do ..SendingSystem()
+			do ..write(cr_"</Referral>")
+			do ..write(cr_"</Referrals>")
+		}
+	}
+}
+
+ClassMethod PatientExtension()
+{
+	Kill SOGIData
+	While $$$Next("OBX") {Do ..GetSOGIData(.SOGIData)}
+	#; PID-27 :VeteransMilitaryStatusV - Only map if source values are not null
+	if (($$$PIDVeteransMilitaryStatusIdentifier'="") || ($$$PIDVeteransMilitaryStatusText'="") ||
+	($$$PIDVeteransMilitaryStatusAltIdentifier'="")||($$$PIDVeteransMilitaryStatusAltText'="") ||($Data(SOGIData))) {
+		do ..write(cr_"<Extension>")
+		// if there is other SOGI data still in array - set in Patient.Extension.SOGI section
+		If $Data(SOGIData) {Do ..SetSOGIData(.SOGIData)}
+		// Military Status
+		if (($$$PIDVeteransMilitaryStatusIdentifier'="") || ($$$PIDVeteransMilitaryStatusText'="")) {
+			do ..write(cr_"<MilitaryStatus>")
+			do ..write(cr_"<Code>"_$$$PIDVeteransMilitaryStatusIdentifier_"</Code>")
+			do ..write(cr_"<Description>"_$$$PIDVeteransMilitaryStatusText_"</Description>")
+			do ..write(cr_"<SDACodingStandard>"_$$$MSHSendingFacilityNamespaceID_"</SDACodingStandard>")
+			do ..write(cr_"</MilitaryStatus>")
+		}
+		
+		// Veteran Status
+		if (($$$PIDVeteransMilitaryStatusAltIdentifier'="") || ($$$PIDVeteransMilitaryStatusAltText'="")) {
+			do ..write(cr_"<VeteranStatus>")
+			do ..write(cr_"<Code>"_$$$PIDVeteransMilitaryStatusAltIdentifier_"</Code>")
+			do ..write(cr_"<Description>"_$$$PIDVeteransMilitaryStatusAltText_"</Description>")
+			do ..write(cr_"<SDACodingStandard>"_$$$MSHSendingFacilityNamespaceID_"</SDACodingStandard>")
+			do ..write(cr_"</VeteranStatus>")
+		}
+
+		do ..write(cr_"</Extension>")
+		
+	}
+	// Initialize last processed value so that Obx's get processed again later (for non-SOGI/non-MilitaryVetStatus data)
+	Set ^||HS.Data("OBX")=0
+}
+
+ClassMethod adta01()
+{
+ set Action=$s(msgType="ADT_A13":"CancelDischarge",1:"AddOrUpdate")
+ do ..EVN(),..PID(),..PD1()
+ while $$$Next("NK1") {do ..NK1()} do ..end("NK1")
+ // j2 - added SOGI section
+ if $$$Next("OBX") {do ..SOGI()}
+ // SOGI section
+ do ..end("PID")
+ while $$$Next("AL1") {do ..AL1()} do ..end("AL1")
+ if ($$$Next("PV1"))&&(..StartEncounters()) {
+	do ..PV1(),..PV2()
+	// ID-722: Updates to Guarantor segments to HS SDA
+	while $$$Next("GT1") {do ..GT1()} do ..end("GT1")
+	while $$$Next("IN1") {do ..IN1()} do ..end("IN1")
+	// CIA-1273: Added DRG for eAbstract, HDM
+	do ..DRG()
+	do ..EndEncounters()
+ }
+ while $$$Next("DG1") {do ..DG1()} do ..end("DG1")
+ while $$$Next("PR1") {do ..PR1()} do ..end("PR1")
+ while $$$Next("OBX") {do ..OBX("obs")} do ..end("OBX")
+}
+
+ClassMethod adta02()
+{
+ set Action="AddOrUpdate"
+ do ..EVN(),..PID(),..PD1()
+ // j2 - added SOGI section
+ if $$$Next("OBX") {do ..SOGI()}
+ // SOGI section
+ do ..end("PID")
+ if ($$$Next("PV1"))&&(..StartEncounters()) {
+	do ..PV1(),..PV2()
+	do ..EndEncounters()
+ }
+ while $$$Next("OBX") {do ..OBX("obs")} do ..end("OBX")
+}
+
+ClassMethod adta03()
+{
+ set Action="AddOrUpdate"
+ do ..EVN(),..PID(),..PD1()
+ while $$$Next("NK1") {do ..NK1()} do ..end("NK1")
+ // j2 - added SOGI section
+ if $$$Next("OBX") {do ..SOGI()}
+ // SOGI section
+ do ..end("PID")
+ while $$$Next("AL1") {do ..AL1()} do ..end("AL1")
+ if ($$$Next("PV1"))&&(..StartEncounters()) {
+	do ..PV1(),..PV2()
+	while $$$Next("GT1") {do ..GT1()} do ..end("GT1")
+	while $$$Next("IN1") {do ..IN1()} do ..end("IN1")
+	If ($$$Next("DRG")) Do ..DRG()
+	do ..EndEncounters()
+ }
+ while $$$Next("DG1") {do ..DG1()} do ..end("DG1")
+ while $$$Next("PR1") {do ..PR1()} do ..end("PR1")
+ while $$$Next("OBX") {do ..OBX("obs")} do ..end("OBX")
+}
+
+ClassMethod adta05()
+{
+ set Action="AddOrUpdate"
+ do ..EVN(),..PID(),..PD1()
+ while $$$Next("NK1") {do ..NK1()} do ..end("NK1")
+ // j2 - added SOGI section
+ if $$$Next("OBX") {do ..SOGI()}
+ // SOGI section
+ do ..end("PID")
+ while $$$Next("AL1") {do ..AL1()} do ..end("AL1")
+ // StartEncounters will return 0 if PatientClass="N" and message type=ADT_A28 or ADT_A31
+ if ($$$Next("PV1"))&&(..StartEncounters()) {
+	do ..PV1(),..PV2()
+	while $$$Next("GT1") {do ..GT1()} do ..end("GT1")
+	while $$$Next("IN1") {do ..IN1()} do ..end("IN1")
+	If ($$$Next("DRG")) Do ..DRG()
+	do ..EndEncounters()
+ }
+ while $$$Next("DG1") {do ..DG1()} do ..end("DG1")
+ while $$$Next("PR1") {do ..PR1()} do ..end("PR1")
+ while $$$Next("OBX") {do ..OBX("obs")} do ..end("OBX")
+}
+
+ClassMethod ormo01()
+{
+ set Action="AddOrUpdate"
+ do ..PID(),..PD1()
+ do ..end("PID")
+ while $$$Next("AL1") {do ..AL1()} do ..end("AL1")
+ if ($$$Next("PV1"))&&(..StartEncounters()) {
+	do ..PV1(),..PV2()
+	while $$$Next("GT1") {do ..GT1()} do ..end("GT1")
+	while $$$Next("IN1") {do ..IN1()} do ..end("IN1")
+ 	do ..EndEncounters() 
+ }
+ while $$$Next("ORCORD") {do ..ORC("ord")} 
+ do ..EndOrder()
+ while $$$Next("ORCMED") {do ..ORC("med")} do ..end("ORCMED")
+ while $$$Next("DG1") {do ..DG1()} do ..end("DG1")
+ if $$$Next("OBX") {do ..ProcessOBXSegmentsFromORM()}
+}
+
+ClassMethod AL1()
+{
+ $$$Find("AL1")
+ #if $$$HSDebug
+	do ##class(HS.Util.HSDebug).Debug("AL1","HS.Gateway.HL7.HL7ToSDA","txt",s)
+ #endif
+
+ do ..start("AL1",cr_"<Allergies>")
+
+ do ..write(cr_"<Allergy>")
+
+ #; AL1-1 : SetIDAL1 ("" means inactivate all, """" means delete all)
+ if $$$AL1SetIDAL1="""""" {
+	do ..write(cr_"<ActionCode>I</ActionCode></Allergy>") quit
+ }
+ elseif $$$AL1SetIDAL1="""""""""" {
+	do ..write(cr_"<ActionCode>C</ActionCode></Allergy>") quit
+ }
+
+ #; AL1-2 : AllergenTypeCode
+ if $$$AL1AllergenTypeCodeIdentifier'="" {
+	do ..write(cr_"<AllergyCategory>")
+	do ..write(cr_"<SDACodingStandard>"_$$$AL1AllergenTypeCodeNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$AL1AllergenTypeCodeIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$AL1AllergenTypeCodeText_"</Description>")
+	do ..write(cr_"</AllergyCategory>")
+}
+ #; AL1-3 : AllergenCodeMnemonicDescript
+ if ($$$AL1AllergenCodeMnemonicDescriptIdentifier'="")||($$$AL1AllergenCodeMnemonicDescriptText'="") {
+	do ..write(cr_"<Allergy>")
+	do ..write(cr_"<SDACodingStandard>"_$$$AL1AllergenCodeMnemonicDescriptNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$AL1AllergenCodeMnemonicDescriptIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$AL1AllergenCodeMnemonicDescriptText_"</Description>")
+	if ($$$AL1AllergenCodeMnemonicAltDescriptIdentifier'="")||($$$AL1AllergenCodeMnemonicAltDescriptText'="") {
+		do ..write(cr_"<PriorCodes>")
+		do ..write(cr_"<PriorCode>")
+		do ..write(cr_"<CodeSystem>"_$$$AL1AllergenCodeMnemonicAltDescriptNameofCodingSystem_"</CodeSystem>")
+		do ..write(cr_"<Code>"_$$$AL1AllergenCodeMnemonicAltDescriptIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$AL1AllergenCodeMnemonicAltDescriptText_"</Description>")
+		do ..write(cr_"<Type>A</Type>")
+		do ..write(cr_"</PriorCode>")
+		do ..write(cr_"</PriorCodes>")
+	}
+	if ($$$AL1AllergenCodeMnemonicOriginalText'="") {
+		do ..write(cr_"<OriginalText>"_$$$AL1AllergenCodeMnemonicOriginalText_"</OriginalText>")
+	}
+	do ..write(cr_"</Allergy>")
+ }
+
+ #; AL1-4 : AllergySeverityCode
+ if ($$$AL1AllergySeverityCodeIdentifier'="")||($$$AL1AllergySeverityCodeText'="") {
+	do ..write(cr_"<Severity>")
+	do ..write(cr_"<SDACodingStandard>"_$$$AL1AllergySeverityCodeNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$AL1AllergySeverityCodeIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$AL1AllergySeverityCodeText_"</Description>")
+	do ..write(cr_"</Severity>")
+ }
+
+ #; AL1-5 : AllergyReaction
+ set %occ="" for {
+	set %occ=$$$AL1AllergyReaction(%occ) quit:%occ=""
+	do ..write(cr_"<Reaction>")
+	do ..write(cr_"<Code>"_$$$AL1AllergyReactionCode(%occ)_"</Code>")
+	do ..write(cr_"</Reaction>")
+	quit  // only one
+ }
+
+ #; AL1-6 : IdentificationDate  (we assume to be HL7 Date)
+ do ..write(cr_"<DiscoveryTime>"_..xmltimestamp($$$AL1IdentificationDate)_"</DiscoveryTime>")
+ do ..write(cr_"<FromTime>"_..xmltimestamp($$$AL1IdentificationDate)_"</FromTime>")
+
+ #; Status - there is no AL1 field for Status, so we force it to 'A' (Active)
+ #;  else 'snapshot mode' would not work - the allergy would stay inactive
+ do ..write(cr_"<Status>A</Status>")
+ 
+ #; MSH-4 : EnteredAt
+ do ..write(cr_"<EnteredAt>")
+ do ..write(cr_"<Code>"_$$$MSHSendingFacilityNamespaceID_"</Code>")
+ do ..write(cr_"</EnteredAt>")
+	
+#; Add sending system info
+ do ..SendingSystem()
+ do ..write(cr_"</Allergy>")
+}
+
+ClassMethod DG1()
+{
+ $$$Find("DG1")
+ // In ADT_A11 (Cancel Admit), DG1 remains for backwards compatibility only, so is ignored here
+ if (msgType="ADT_A11") {
+	 do:pLogAlerts ##Class(Ens.Util.Log).LogAlert("HS.Gateway.HL7.HL7ToSDA3","GetSDA","Segment "_s_" of type DG1 is supported in ADT_A11 for backwards compatibility only and will not be parsed.")
+	 quit
+ }
+ #if $$$HSDebug
+	do ##class(HS.Util.HSDebug).Debug("DG1","HS.Gateway.HL7.HL7ToSDA","txt",s)
+ #endif
+
+ do ..start("DG1",cr_"<Diagnoses>")
+
+ do ..write(cr_"<Diagnosis>")
+ do ..WriteEncounterNumber(encNum)
+
+ 
+ #; DG1-1 : SetIDDG1 ("" means inactivate all, """" means delete all)
+ if $$$DG1SetIDDG1="""""" {
+	do ..write(cr_"<ActionCode>I</ActionCode></Diagnosis>") quit
+ }
+ elseif $$$DG1SetIDDG1="""""""""" {
+	do ..write(cr_"<ActionCode>C</ActionCode></Diagnosis>") quit
+ }
+
+ #; DG1-3 : DiagnosisCodeDG1
+ if ($$$DG1DiagnosisCodeDG1Identifier'="")||($$$DG1DiagnosisCodeDG1Text'="") {
+	do ..write(cr_"<Diagnosis>")
+	do ..write(cr_"<SDACodingStandard>"_$$$DG1DiagnosisCodeDG1NameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$DG1DiagnosisCodeDG1Identifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$DG1DiagnosisCodeDG1Text_"</Description>")
+	if ($$$DG1DiagnosisCodeDG1AltIdentifier'="")||($$$DG1DiagnosisCodeDG1AltText'="") {
+		do ..write(cr_"<PriorCodes>")
+		do ..write(cr_"<PriorCode>")
+		do ..write(cr_"<CodeSystem>"_$$$DG1DiagnosisCodeDG1AltNameofCodingSystem_"</CodeSystem>")
+		do ..write(cr_"<Code>"_$$$DG1DiagnosisCodeDG1AltIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$DG1DiagnosisCodeDG1AltText_"</Description>")
+		do ..write(cr_"<Type>A</Type>")
+		do ..write(cr_"</PriorCode>")
+		do ..write(cr_"</PriorCodes>")
+	}
+	if ($$$DG1DiagnosisCodeDG1OriginalText'="") {
+		do ..write(cr_"<OriginalText>"_$$$DG1DiagnosisCodeDG1OriginalText_"</OriginalText>")
+	}
+	do ..write(cr_"</Diagnosis>")
+ } 
+
+ #; DG1-4 : DiagnosisDescription
+ elseif $$$DG1DiagnosisDescription'="" {
+	do ..write(cr_"<Diagnosis>")
+	do ..write(cr_"<Code>"_$$$DG1DiagnosisDescription_"</Code>")
+	do ..write(cr_"</Diagnosis>")
+ }
+
+ #; DG1-5 : DiagnosisDateTime
+ do ..write(cr_"<EnteredOn>"_..xmltimestamp($$$DG1DiagnosisDateTimeTime)_"</EnteredOn>")
+
+ #; DG1-6 : DiagnosisType
+ if $$$DG1DiagnosisType'="" {
+	do ..write(cr_"<DiagnosisType>")
+	do ..write(cr_"<Code>"_$$$DG1DiagnosisType_"</Code>")
+	do ..write(cr_"</DiagnosisType>")
+ }
+
+ #; DG1-16 : DiagnosingClinician
+ set %occ="" for {
+	set %occ=$$$DG1DiagnosingClinician(%occ) quit:%occ=""
+	do ..By("<DiagnosingClinician>",,
+		"CareProvider",
+		$$$DG1DiagnosingClinicianIDAssigningAuthority(%occ),
+		$$$DG1DiagnosingClinicianIDNumber(%occ),
+		$$$DG1DiagnosingClinicianFamilyNameSurname(%occ),
+		$$$DG1DiagnosingClinicianGivenName(%occ),
+		$$$DG1DiagnosingClinicianMiddleName(%occ),
+		$$$DG1DiagnosingClinicianNamePrefix(%occ),
+		$$$DG1DiagnosingClinicianNameSuffix(%occ),
+		$$$DG1DiagnosingClinicianProfessionalSuffix(%occ))
+	quit  // only one
+ }
+
+ #; DG1-21 : DiagnosisActionCode
+ #; Only allow A,D or U (HL7 values).  Note that 'I' would cause 'Inactivate ALL'
+ set action=$$$DG1DiagnosisActionCode if ",A,D,U,,"'[(","_action_",") set action="A"
+ do ..write(cr_"<ActionCode>"_action_"</ActionCode>")
+ kill action
+
+ #; Status - there is no DG1 field for Status, so we force it to 'A' (Active)
+ #;  else 'snapshot mode' would not work - the diagnoses would stay inactive
+ do ..write(cr_"<Status><Code>A</Code><Description>Active</Description></Status>")
+ 
+ #; Add the Sending System information
+ do ..SendingSystem()
+ 
+ #; MSH-4 : SendingFacility -> EnteredAt in SuperClass 
+ do ..write(cr_"<EnteredAt>")
+ do ..write(cr_"<Code>"_$$$MSHSendingFacilityNamespaceID_"</Code>")
+ do ..write(cr_"</EnteredAt>")
+ do ..write(cr_"</Diagnosis>")
+}
+
+ClassMethod DRG()
+{
+ $$$Find("DRG")
+ Do ..write(cr_"<DiagnosisRelatedGroup>")
+ Do ..write(cr_"<Code>"_$$$xml($g(^||HS.Data(s,1,1)))_"</Code>")
+ Do ..write(cr_"<Description>"_$$$xml($g(^||HS.Data(s,1,2)))_"</Description>")
+ Do ..write(cr_"<SDACodingStandard>"_$$$xml($g(^||HS.Data(s,1,3)))_"</SDACodingStandard>")
+ Do ..write(cr_"</DiagnosisRelatedGroup>")
+ 
+ #if $$$HSDebug
+	do ##class(HS.Util.HSDebug).Debug("DRG","HS.Gateway.HL7.HL7ToSDA","txt",s)
+ #endif
+}
+
+ClassMethod EndEncounters()
+{
+	do ..SendingSystem()
+ 	do ..write(cr_"</Encounter>")
+ 	do ..write(cr_"</Encounters>")
+}
+
+ClassMethod OBR(mode As %String)
+{
+ if mode="obs" {   // ORU OrderTypeIdentifier="OBS"
+	$$$GetFollowing("OBR")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("OBR(obs)","HS.Gateway.HL7.HL7ToSDA","txt",s)
+	#endif
+	// ignore any OBR NTE's as we have no place to put them (the Comments
+	// field in HS.SDA.Observation is used for the OBX NTE's)
+	while $$$IsFollowing("NTE") {$$$GetFollowing("NTE")}
+	quit
+ }
+
+ #; else mode="ord", "lab" or "txt"
+ $$$Find("OBR")  // J2 How much will this break changing from GetFollowing to Find
+ #if $$$HSDebug
+	do ##class(HS.Util.HSDebug).Debug("OBR("_mode_")","HS.Gateway.HL7.HL7ToSDA","txt",s)
+ #endif
+
+ #; OBR-2 : PlacerOrderNumber
+ do ..write(cr_"<PlacerId>"_$$$OBRPlacerOrderNumberEntityIdentifier_"</PlacerId>")
+
+ #; J2 -- add namespace and Universal ID
+ Set pfs=$$$OBRPlacerOrderNumberNamespace_"^"_$$$OBRPlacerOrderNumberUniversalID_"^"_$$$OBRPlacerOrderNumberUniversalIDType
+ do:pfs'="^^" ..write(cr_"<PlacerAssigningAuthority>"_pfs_"</PlacerAssigningAuthority>")
+
+ #; OBR-3 : FillerOrderNumber
+ do ..write(cr_"<FillerId>"_$$$OBRFillerOrderNumberEntityIdentifier_"</FillerId>")
+ 
+ #; J2 -- add namespace and Universal ID
+ Set pfs=$$$OBRFillerOrderNumberNamespace_"^"_$$$OBRFillerOrderNumberUniversalID_"^"_$$$OBRFillerOrderNumberUniversalIDType
+ do:pfs'="^^" ..write(cr_"<FillerAssigningAuthority>"_pfs_"</FillerAssigningAuthority>")
+
+
+ #; OBR-4 : UniversalServiceIdentifier
+ if ($$$OBRUniversalServiceIdentifierIdentifier'="")||
+    ($$$OBRUniversalServiceIdentifierText'="") {
+	do ..write(cr_"<OrderItem>")
+	do ..write(cr_"<SDACodingStandard>"_$$$OBRUniversalServiceIdentifierNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$OBRUniversalServiceIdentifierIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$OBRUniversalServiceIdentifierText_"</Description>")
+	do ..write(cr_"<CodeSystemVersionId>"_$$$OBRUniversalServiceIdentifierCodeSystemVersionId_"</CodeSystemVersionId>")
+	if ($$$OBRUniversalServiceIdentifierAltIdentifier'="")||($$$OBRUniversalServiceIdentifierAltText'="") {
+		do ..write(cr_"<PriorCodes>")
+		do ..write(cr_"<PriorCode>")
+		do ..write(cr_"<Code>"_$$$OBRUniversalServiceIdentifierAltIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$OBRUniversalServiceIdentifierAltText_"</Description>")
+		do ..write(cr_"<CodeSystem>"_$$$OBRUniversalServiceIdentifierAltNameofCodingSystem_"</CodeSystem>")
+		do ..write(cr_"<CodeSystemVersionId>"_$$$OBRUniversalServiceIdentifierAltCodeSystemVersionId_"</CodeSystemVersionId>")
+		do ..write(cr_"<Type>A</Type>")
+		do ..write(cr_"</PriorCode>")
+		do ..write(cr_"</PriorCodes>")
+	}
+	if ($$$OBRUniversalServiceIdentifierOriginalText'="") {
+		do ..write(cr_"<OriginalText>"_$$$OBRUniversalServiceIdentifierOriginalText_"</OriginalText>")
+	}
+	do ..write(cr_"</OrderItem>")
+ }
+
+ #; OBR-5 : PriorityOBR
+ if $$$OBRPriorityOBR'="" {
+	do ..write(cr_"<Priority>")
+	do ..write(cr_"<Code>"_$$$OBRPriorityOBR_"</Code>")
+	do ..write(cr_"</Priority>")
+ }
+
+ #; OBR-6 : RequestedDateTime  (see also ORC-7.4, OBR-27.4 and TQ1-7)
+ do ..write(cr_"<FromTime>"_..xmltimestamp($$$OBRRequestedDateTimeTime)_"</FromTime>")
+
+ #; OBR-7 : ObservationDateTime
+ do ..write(cr_"<SpecimenCollectedTime>"_..xmltimestamp($$$OBRObservationDateTimeTime)_"</SpecimenCollectedTime>")
+
+ #; OBR-11 : SpecimenActionCode
+ #; Record here, then use it when processing any following SPM segments
+ set specimenActionCode = $$$OBRSpecimenActionCode
+
+ // J2 PJH
+ #; OBR-13 - Relevent Clinicial Information
+ do ..write(cr_"<ClinicalInformation>"_$$$OBRObservationClinicalInformation_"</ClinicalInformation>")
+
+ #; OBR-14 : SpecimenReceivedDateTime
+ do ..write(cr_"<SpecimenReceivedTime>"_..xmltimestamp($$$OBRSpecimenReceivedDateTimeTime)_"</SpecimenReceivedTime>")
+
+ #; OBR-15 : SpecimenSource
+ if $$$OBRSpecimenSourceSpecimenSourceNameorCodeText'="" {
+	do ..write(cr_"<Specimen>"_$$$OBRSpecimenSourceSpecimenSourceNameorCodeText_"</Specimen>")
+ } else {
+	do ..write(cr_"<Specimen>"_$$$OBRSpecimenSourceSpecimenSourceNameorCodeIdentifier_"</Specimen>")
+ }
+ 
+ #; J2 PJH - Pass in Suffix
+ #; OBR-16 : OrderingProvider  (see also ORC-12, RXO-14)
+ set %occ="" for {
+	set %occ=$$$OBROrderingProvider(%occ) quit:%occ=""
+ 	if $$$OBROrderingProviderIDNumber(%occ)'="" {
+		do ..By("<OrderedBy>",,
+			"CareProvider",
+			$$$OBROrderingProviderAssigningAuthority(%occ),
+			$$$OBROrderingProviderIDNumber(%occ),
+			$$$OBROrderingProviderFamilyNameSurname(%occ),
+			$$$OBROrderingProviderGivenName(%occ),
+			$$$OBROrderingProviderMiddleName(%occ),
+			$$$OBROrderingProviderNamePrefix(%occ),
+			$$$OBROrderingProviderNameSuffix(%occ),
+			$$$OBROrderingProviderNameProfessionalSuffix(%occ),
+			$$$OBROrderingProviderNameTypeCode(%occ),
+			$$$OBROrderingProviderIdentifierTypeCode(%occ))
+		quit  // only one
+ 	}
+ }
+
+ #; OBR-17 : OrderCallbackPhoneNumber  (see also ORC-14)
+ do ..PhonesAndEmail(s,17,.workphone,.workmobile,.workemail,.workfax)
+ set callback=""
+ set work=$tr(workphone,"^",",") if work'="" set callback=work
+ set mobile=$tr(workmobile,"^",",")
+ if mobile'="" {
+	 if callback'="" set callback=callback_", "
+	 set callback=callback_"Mobile: "_mobile}
+ set fax=$tr(workfax,"^",",")
+ if fax'="" {
+	 if callback'="" set callback=callback_", "
+	 set callback=callback_"Fax: "_fax}
+ set email=$tr(workemail,"^",",")
+ if email'="" {
+	 if callback'="" set callback=callback_", "
+	 set callback=callback_"email: "_email}
+ do ..write(cr_"<CallbackNumber>"_..xml(callback)_"</CallbackNumber>")
+ kill callback,work,mobile,email,fax
+ 
+ #; OBR-22 : ResultsRptStatusChngDateTime
+ set resulttime=$$$OBRResultsRptStatusChngDateTimeTime // See OBX
+ #; OBR-24: DiagnosticServSectID - see OBR-4
+ #; OrderCategory is being created as a code table rather than a string to make it more flexible if/when we
+ #; want it as a proper code table in the SDA from non-HL7 sources.
+ If $$$OBRDiagnosticServSectID'="" {
+	do ..write(cr_"<OrderCategory>")
+	do ..write(cr_"<Code>"_$zcvt($$$OBRDiagnosticServSectID,"U")_"</Code>")
+	do ..write(cr_"</OrderCategory>")
+ }
+ #; OBR-25 : ResultStatus
+ set resultstatus=$$$OBRResultStatus // See OBX
+ 
+ #; J2
+ #; OBR-26.1 : Parent Result Observation
+ //ParentResultObservation
+ do ..write(cr_"<ParentResultObservation>")
+ do ..write(cr_"<Code>"_$$$OBRParentResultObservationIdentifierIdentifier_"</Code>")
+ do ..write(cr_"<Description>"_$$$OBRParentResultObservationIdentifierText_"</Description>")
+ do ..write(cr_"<SDACodingStandard>"_$$$OBRParentResultObservationIdentifierNameOfCodingSystem_"</SDACodingStandard>")
+ If $$$OBRParentResultObservationIdentifierAltIdentifier'=""||($$$OBRParentResultObservationIdentifierAltText'="") {
+	 do ..write(cr_"<PriorCodes>")
+	 	do ..write(cr_"<PriorCode>")
+			do ..write(cr_"<CodeSystem>"_$$$OBRParentResultObservationIdentifierAltNameOfCodingSystem_"</CodeSystem>")
+			do ..write(cr_"<Code>"_$$$OBRParentResultObservationIdentifierAltIdentifier_"</Code>")
+			do ..write(cr_"<Description>"_$$$OBRParentResultObservationIdentifierAltText_"</Description>")
+			do ..write(cr_"<Type>A</Type>")
+ 		do ..write(cr_"</PriorCode>")
+ 	do ..write(cr_"</PriorCodes>")
+ }
+ do ..write(cr_"</ParentResultObservation>")
+ 
+ #; J2
+ #; OBR-26.2 : Parent Result Observation Sub Id
+ //ParentResultObservationSubId
+ do ..write(cr_"<ParentResultObservationSubId>"_$$$OBRParentResultObservationSubIdentifier_"</ParentResultObservationSubId>")
+ #; J2
+ #; OBR-26.3 : Parent Result Observation Text
+ do ..write(cr_"<ParentResultObservationText>"_$$$OBRParentResultObservationValueDescription_"</ParentResultObservationText>")
+
+ #; OBR-27 : QuantityTiming  (see also ORC-7, TQ1-2, -7, -8, -9, -10, -11, OBR-6)
+ set %occ="" for {
+	set %occ=$$$OBRQuantityTiming(%occ) quit:%occ=""
+	 
+	do ..write(cr_"<OrderQuantity>"_$$$OBRQuantityTimingQuantityQuantity(%occ)_"</OrderQuantity>")
+
+	if $$$OBRQuantityTimingDuration(%occ)'="" {
+		do ..write(cr_"<Duration>")
+		do ..write(cr_"<Code>"_$$$OBRQuantityTimingDuration(%occ)_"</Code>")
+		do ..write(cr_"</Duration>")
+	}
+	
+	do ..write(cr_"<FromTime>"_..xmltimestamp($$$OBRQuantityTimingStartDateTimeTime(%occ))_"</FromTime>")
+	do ..write(cr_"<ToTime>"_..xmltimestamp($$$OBRQuantityTimingEndDateTimeTime(%occ))_"</ToTime>")
+
+	if $$$OBRQuantityTimingPriority(%occ)'="" {
+		do ..write(cr_"<Priority>")
+		do ..write(cr_"<Code>"_$$$OBRQuantityTimingPriority(%occ)_"</Code>")
+		do ..write(cr_"</Priority>")
+	}
+
+	do ..write(cr_"<Condition>"_$$$OBRQuantityTimingCondition(%occ)_"</Condition>")
+	do ..write(cr_"<TextInstruction>"_$$$OBRQuantityTimingText(%occ)_"</TextInstruction>")
+
+ }
+ #; J2 PJH Pass in Suffix
+ #; OBR-28 : ResultCopiesTo
+ set %occ=""
+ If $$$OBRCopyProvider(%occ) {
+	 Do ..write(cr_"<ResultCopiesTo>")
+	 for {
+		set %occ=$$$OBRCopyProvider(%occ) quit:%occ=""
+	 	if $$$OBRCopyProviderIDNumber(%occ)'="" {
+			do ..By("<CareProvider>",,
+				"CareProvider",
+				$$$OBRCopyProviderAssigningAuthority(%occ),
+				$$$OBRCopyProviderIDNumber(%occ),
+				$$$OBRCopyProviderFamilyNameSurname(%occ),
+				$$$OBRCopyProviderGivenName(%occ),
+				$$$OBRCopyProviderMiddleName(%occ),
+				$$$OBRCopyProviderNamePrefix(%occ),
+				$$$OBRCopyProviderNameSuffix(%occ))
+	 	}
+	 }
+	 Do ..write(cr_"</ResultCopiesTo>")
+ }
+ 
+ #; J2
+ #; OBR-29.1.1 ParentPlacerId
+ do ..write(cr_"<ParentPlacerId>"_$$$OBRParentPlacerId_"</ParentPlacerId>")
+ 
+ #; add namespace and Universal ID
+ Set pfs=$$$OBRParentPlacerAssignedIdentifierNamespaceID_"^"_$$$OBRParentPlacerAssignedIdentifierUniversalID_"^"_$$$OBRParentPlacerAssignedIdentifierUniversalIDType
+ do:pfs'="^^" ..write(cr_"<ParentPlacerAssigningAuthority>"_pfs_"</ParentPlacerAssigningAuthority>")
+
+ #; J2
+ #; OBR-29.2.1 ParentFillerId
+ do ..write(cr_"<ParentFillerId>"_$$$OBRParentFillerId_"</ParentFillerId>")
+ 
+ #; add namespace and Universal ID
+ Set pfs=$$$OBRParentFillerAssignedIdentifierNamespaceID_"^"_$$$OBRParentFillerAssignedIdentifierUniversalID_"^"_$$$OBRParentFillerAssignedIdentifierUniversalIDType
+ do:pfs'="^^" ..write(cr_"<ParentFillerAssigningAuthority>"_pfs_"</ParentFillerAssigningAuthority>")
+
+ // J2 PJH Allow Reason for Study
+ #; OBR-31 : ReasonForStudy
+ 
+ If $$$OBRReasonForStudy'="" {
+	Do ..write(cr_"<ReasonForStudy>")
+		do ..write(cr_"<Code>"_$$$OBRReasonForStudyIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$OBRReasonForStudyDescription_"</Description>")
+		do ..write(cr_"<SDACodingStandard>"_$$$OBRReasonForStudyNameofCodingSystem_"</SDACodingStandard>")
+		do ..write(cr_"<CodeSystemVersionId>"_$$$OBRReasonForStudyCodeSystemVersionId_"</CodeSystemVersionId>")
+		if $$$OBRReasonForStudyAltIdentifier'=""||($$$OBRReasonForStudyAltText'="") {
+			do ..write(cr_"<PriorCodes>")
+			do ..write(cr_"<PriorCode>")
+			do ..write(cr_"<Code>"_$$$OBRReasonForStudyAltIdentifier_"</Code>")
+			do ..write(cr_"<Description>"_$$$OBRReasonForStudyAltText_"</Description>")
+			do ..write(cr_"<CodeSystem>"_$$$OBRReasonForStudyAltNameofCodingSystem_"</CodeSystem>")
+			do ..write(cr_"<CodeSystemVersionId>"_$$$OBRReasonForStudyAltCodeSystemVersionId_"</CodeSystemVersionId>")
+			do ..write(cr_"<Type>A</Type>")
+			do ..write(cr_"</PriorCode>")
+			do ..write(cr_"</PriorCodes>")
+		}
+	 Do ..write(cr_"</ReasonForStudy>")
+ }
+ 
+  // J2 PJH - Populate Verified By
+ #; OBR-32 - Principal Intepreter
+ do ..By("<VerifiedBy>",,
+	"ResultsInterpreter",
+	$$$OBRPrincipalResultsAssigningAuthNamespaceID,
+	$$$OBRPrincipalResultsInterpreterIDNumber,
+	$$$OBRPrincipalResultsInterpreterFamilyNameSurname,
+	$$$OBRPrincipalResultsInterpreterGivenName,
+	$$$OBRPrincipalResultsInterpreterMiddleName,
+	$$$OBRPrincipalResultsInterpreterNamePrefix,
+	$$$OBRPrincipalResultsInterpreterNameSuffix,
+	$$$OBRPrincipalResultsInterpreterNameProfessionalSuffix
+ )
+ #; Add Sending System
+ do ..SendingSystem()
+}
+
+ClassMethod OBX(mode As %String)
+{
+
+ // J2 PJh Allow spm
+ if ((mode="obs")||(mode="vxu")) {
+
+	$$$Find("OBX")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("OBX("_mode_")","HS.Gateway.HL7.HL7ToSDA","txt",s)
+	#endif
+	
+	// Do not process OBX's if SubId="SOGI" (Sexual Orientation and Gender Identity values will be stored in Patient level - See SOGI method
+	Quit:$$$OBXObservationSubID="SOGI"
+	
+	// J2 PJH - call VXU Observations VXUObservations
+	If mode="vxu" {
+		do ..start("OBX",cr_"<VXUObservations>")
+	} Else {
+		do ..start("OBX",cr_"<Observations>")
+	}
+	do ..write(cr_"<Observation>")
+	do ..write(cr_"<EncounterNumber>"_encNum_"</EncounterNumber>")
+
+	#; OBX-3 : ObservationIdentifier
+	if $$$OBXObservationIdentifierIdentifier(s)'="" { 	 
+		do ..write(cr_"<ObservationCode>")
+		do ..write(cr_"<SDACodingStandard>"_$$$OBXObservationIdentifierNameofCodingSystem(s)_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_"</Code>")
+		do ..write(cr_"<Description>"_$$$OBXObservationIdentifierText(s)_"</Description>")
+	#; OBX-6 : Units
+		if ($$$OBXUnitsIdentifier'="") {
+			do ..write(cr_"<ObservationValueUnits>")
+			do ..write(cr_"<SDACodingStandard>"_$$$OBXUnitsNameofCodingSystem_"</SDACodingStandard>")
+			do ..write(cr_"<Code>"_$$$OBXUnitsIdentifier_"</Code>")
+			do ..write(cr_"<Description>"_$$$OBXUnitsText_"</Description>")
+			do ..write(cr_"</ObservationValueUnits>")
+		}		
+		do ..write(cr_"</ObservationCode>")
+	}
+
+	#; OBX-5 : ObservationValue
+	#; J2 Add mode for VXU so all observation parameters come across
+	set type=$$$OBXValueType
+	do ..write("<ObservationValueType>"_type_"</ObservationValueType>")
+	#;Check for compatability flag -- if set process as usual
+	#;Only have compatability mode for obs as vxu and spm are new and
+	#;do not have compatability issues
+	If ((obxmode)&&(mode="obs")){
+		set (%occ,value)="" for {
+			set %occ=$$$OBXObservation(%occ) quit:%occ=""
+			if value'="" set value=value_", "
+			set value=value_$$$OBXObservationValue(%occ)
+		}
+		do ..write(cr_"<ObservationValue>"_value_"</ObservationValue>")
+		kill value
+	}Else{ //Otherwise add coded observation values
+		if ("CE,CWE,CNE,SN"[type) {
+			do ..write(cr_"<ObservationCodedValue>")
+			if ("SN"=type) {
+				do ..write("<Code>"_$$$OBXObservationValueAll_"</Code>")
+			}else{
+				do ..write("<Code>"_$$$OBXObservationValues_"</Code>")
+			}
+			do ..write("<Description>"_$$$OBXObservationText_"</Description>")
+			do ..write("<SDACodingStandard>"_$$$OBXObservationValueEDDataSubType_"</SDACodingStandard>")
+			// J2 PJH, Make conditional
+			If $$$OBXObservationValueEDEncoding'=""||($$$OBXObservationValueEDData'="") {
+				do ..write(cr_"<PriorCodes>")
+				do ..write(cr_"<PriorCode>")
+				do ..write(cr_"<Code>"_$$$OBXObservationValueEDEncoding_"</Code>")
+				do ..write(cr_"<Description>"_$$$OBXObservationValueEDData_"</Description>")
+				do ..write(cr_"<CodeSystem>"_$$$OBXObservationValueAltCodeSystem_"</CodeSystem>")
+				do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationValueAltCodeSystemVersion_"</CodeSystemVersionId>")
+				do ..write(cr_"<Type>A</Type>")
+				do ..write(cr_"</PriorCode>")
+				do ..write(cr_"</PriorCodes>")
+			}
+			do ..write("<CodeSystemVersionId>"_$$$OBXObservationValueCodeSystemVersion_"</CodeSystemVersionId>")
+			do ..write("<OriginalText>"_$$$OBXObservationValueOriginalText_"</OriginalText>")
+			do ..write(cr_"</ObservationCodedValue>")
+			#; Now set original Observation Value with reasonable string display
+			if ($$$OBXObservationText'=""){
+				do ..write(cr_"<ObservationValue>"_$$$OBXObservationText_"</ObservationValue>")
+			}else{
+				do ..write(cr_"<ObservationValue>"_$$$OBXObservationValueOriginalText_"</ObservationValue>")
+			}
+		}elseif ("TS,DT"[type) {
+			do ..write(cr_"<ObservationValueTime>"_..xmltimestamp($$$OBXObservationValues)_"</ObservationValueTime>")
+			#; Now set original Observation Value with reasonable string display
+			do ..write(cr_"<ObservationValue>"_$Piece(..xmltimestamp($$$OBXObservationValues),"T")_" "_$Piece(..xmltimestamp($$$OBXObservationValues),"T",2)_"</ObservationValue>")
+		}Else{ // If not a coded value just do the normal processing
+			set (%occ,value)="" for {
+				set %occ=$$$OBXObservation(%occ) quit:%occ=""
+				if value'="" set value=value_", "
+				set value=value_$$$OBXObservationValue(%occ)
+			}
+			do ..write(cr_"<ObservationValue>"_value_"</ObservationValue>")
+			kill value
+		}
+	}
+
+	#; OBX-14 : DateTimeoftheObservation
+	do ..write(cr_"<ObservationTime>"_..xmltimestamp($$$OBXDateTimeoftheObservationTime)_"</ObservationTime>")
+	
+	#; J2
+	#; OBX-17 : Observation Method
+	do ..write(cr_"<ObservationMethods>")
+	set %occ="" for {
+		set %occ=$$$OBXObservationMethod(%occ) quit:%occ=""
+		do ..write(cr_"<ObservationMethod>")
+		do ..write(cr_"<Code>"_$$$OBXObservationMethodCodeIdentifier(%occ)_"</Code>")
+		do ..write(cr_"<Description>"_$$$OBXObservationMethodCodeText(%occ)_"</Description>")
+		do ..write(cr_"<SDACodingStandard>"_$$$OBXObservationMethodCodeNameofCodingSystem(%occ)_"</SDACodingStandard>")
+		do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationMethodCodeCodeSystemVersionId(%occ)_"</CodeSystemVersionId>")
+		If ($$$OBXObservationMethodCodeAltIdentifer(%occ)'="")||($$$OBXObservationMethodCodeAltText(%occ)'="") {
+			do ..write(cr_"<PriorCodes>")
+				do ..write(cr_"<PriorCode>")
+					do ..write(cr_"<Code>"_$$$OBXObservationMethodCodeAltIdentifer(%occ)_"</Code>")
+					do ..write(cr_"<Description>"_$$$OBXObservationMethodCodeAltText(%occ)_"</Description>")
+					do ..write(cr_"<CodeSystem>"_$$$OBXObservationMethodCodeAltNameofCodingSystem(%occ)_"</CodeSystem>")
+					do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationMethodCodeAltCodeSystemVersionId(%occ)_"</CodeSystemVersionId>")
+					do ..write(cr_"<Type>A</Type>")
+				do ..write(cr_"</PriorCode>")
+			do ..write(cr_"</PriorCodes>")
+		}
+		do ..write(cr_"</ObservationMethod>")
+	}
+	do ..write(cr_"</ObservationMethods>")
+
+	// J2 PJH - Add in Observation Sub ID for vxu OBX sorting
+	#; OBX-4 : Observation Sub-ID
+	If mode="vxu" {
+		do ..write(cr_"<GroupId>"_$$$OBXObservationSubID_"</GroupId>")
+	}
+
+
+	do ..NTE()
+	
+	#; Add sending system 
+	do ..SendingSystem()
+	do ..write(cr_"</Observation>")
+	quit
+ }
+
+ if mode="mdm"||(mode="txt") {  // MDM Document or Text Result 
+
+	set saves=s
+	
+	// Get first OBX
+	$$$GetFollowing("OBX")  // will quit if none
+	
+	if mode="txt" {
+		#; OBX-15 : ProducersID
+		#; OBX-25 Performing Organization Medical Director 
+		Do ..writePerformedAt()
+			
+		#; OBX-8 : Abnormal Flags
+		#; If any OBX-8 = A, flag the whole result as abnormal.
+		for {
+			set %occ="" for {
+				set %occ=$$$OBXAbnormalFlag(%occ) quit:%occ=""
+				if $$$OBXAbnormalFlags(%occ)="A" {
+					do ..write(cr_"<ResultInterpretation>A</ResultInterpretation>")
+					quit	
+				}
+			}
+			$$$GetFollowing("OBX")
+		}			
+		set s=saves+1
+	}
+	
+	// ID-2588 Critical Results Extension from RIS (RAD) results
+	// Value pulled from OBX:8 when OCR:29.1 = "RAD"
+	// Need to search for OCR segment number since it is out of context
+	Set tORCSegNumber=0
+	Set tORCSegNumber=$o(^||HS.Data("ORC",$g(^||HS.Data("ORC"))))
+	if (tORCSegNumber > 0) {
+		 Set tORCSeg=$g(^||HS.Data(tORCSegNumber,29,1))
+	} Else {
+		Set tORCSeg=""
+	}
+	if (tORCSeg ="RAD") {
+		// Pull in all values of repeating OBX:8 field
+		set (%occ,value)="" for {
+			set %occ=$$$OBXAbnormalFlag(%occ) quit:%occ=""
+			if value'="" set value=value_", "
+			set value=value_$$$OBXAbnormalFlags(%occ)
+		}
+
+		// Write data to extension if any				
+		if value '="" {
+			do ..write(cr_"<Extension>")			
+			do ..write(cr_"<ResultInterpretation>"_value_"</ResultInterpretation>")
+			do ..write(cr_"</Extension>")
+		}
+	}
+
+	
+	// If RP then URL
+	// If ED then encapsulated document with type in OBX-5.3
+	// If OBX-5 is {\rtf... then encapsulated document with type "RTF"
+	// Else plain text NoteText 
+	
+	#; OBX-2 : ValueType  if RP then OBX-5.1 = URL
+	#; Text Results will use a DocumentURL if the first OBX has ValueType of RP.
+	#; Otherwise the content is included in the text result.
+	set type=$$$OBXValueType
+ 	if type="RP" {
+		do ..write(cr_"<DocumentURL>"_$$$xml(..unescape($$$OBXObservationValues))_"</DocumentURL>")
+		#; Continue if there is further OBX segments to be processed.
+		if '$$$IsFollowing("OBX") quit
+		#; Do not include the RP ValueType OBX in the text
+		set saves=s
+	}
+
+ 	#; OBX-5.3 : ObservationValueEDDataSubType
+ 	if type="ED" {
+		set filetype=$$$OBXObservationValueEDDataSubType
+ 	} elseif $Extract($$$OBXObservationValues,1,5)="{\rtf" {
+		set filetype="RTF"
+	} else {  // Assumed plain text
+		set s=saves
+		set tag=$s(mode="mdm":"NoteText",1:"ResultText")
+		do ..writecdata(tag,"OBX",5,"NTE",3)
+		quit
+	}
+
+	// Encapsulated document
+	do ..write(cr_"<FileType>"_filetype_"</FileType>")
+	kill filetype
+
+	#; OBX-5.4 : ObservationValueEDEncoding
+	set encoding=$$$OBXObservationValueEDEncoding
+	
+	#; OBX-5.1 : ObservationValues
+	#; NTE-3 : Comments
+	// Make text out of this (and following) OBX's and NTE's
+	set text=..gettext("OBX",5,"NTE",3) if text="" quit
+
+	// If the data is not already Base64 encoded, then encode it.
+	if $zcvt(encoding,"U")'="BASE64" {
+		set text = $system.Encryption.Base64Encode(text)
+	}
+
+	do ..write(cr_"<Stream>"_text_"</Stream>")
+	kill text
+
+	quit
+ }
+ 
+ if (mode="lab") {
+	#; Handles stream of OBX's (perhaps with NTE's) for one ORC/OBR
+	#; Each OBX is    OBX||type|identifier||result...
+	#; Each <LabResultItem> has a <TestItemCode> followed by a single <ResultValue> with
+	#;  a) block of FT's (with the same identifier)
+	#;  b) block of TX's (with the same identifier)
+	#;  c) single item
+	#; followed by units, ranges and interpretation and an optional NTE
+
+	#; Save where we are in the list of segments as want to loop through them twice
+	set saves=s
+	kill TestItem,TestItemUsed
+	while $$$IsFollowing("OBX") {
+		$$$GetFollowing("OBX")
+		#; Setup Array for speed to identify when same TestCode is used more than once.
+		#; Used when we tag the SubID on it to ensure don't lose data
+		#; If there is no SubID then we need to use something else otherwise will lose data
+		set obsid=$$$OBXObservationIdentifierIdentifier(s)
+		if obsid'="" set TestItem(obsid)=$g(TestItem(obsid))+1
+		#; Beware there can be NTEs mixed in with the OBXs, so skip them
+		while $$$IsFollowing("NTE") { $$$GetFollowing("NTE")}
+	}
+	set s=saves
+
+	while $$$IsFollowing("OBX") {
+		$$$GetFollowing("OBX")
+		#if $$$HSDebug
+			do ##class(HS.Util.HSDebug).Debug("OBX(lab)","HS.Gateway.HL7.HL7ToSDA","txt",s)
+		#endif
+
+		#; Log and ignore if no Item
+		set obsid=$$$OBXObservationIdentifierIdentifier(s)
+ 		if obsid="" {
+	 		do ##Class(Ens.Util.Log).LogAlert("HS.Gateway.HL7.HL7ToSDA3","OBX","Segment "_s_" has no ObservationIdentifier. Ignored.") 
+			while $$$IsFollowing("NTE") { $$$GetFollowing("NTE")}  // Skip any NTE(s)
+			continue
+ 		}
+
+		#; Start new group
+		do ..write(cr_"<LabResultItem>")
+		#; OBX-8 : AbnormalFlags
+		#; AW This is out of sequence to deal with special cases of AntiBiotic Resistance
+		#; it is needed to process OBX-3
+		set (%occ,flags)="" for {
+			set %occ=$$$OBXAbnormalFlag(%occ) quit:%occ=""
+			if $$$OBXAbnormalFlags(%occ)'="" {
+				if flags'="" set flags=flags_", "
+				set flags=flags_$$$OBXAbnormalFlags(%occ)	
+			}
+		}
+		do ..write(cr_"<ResultInterpretation>"_flags_"</ResultInterpretation>")
+		
+		#; OBX-2 : ValueType
+		set type=$$$OBXValueType
+
+		#; OBX-3 : ObservationIdentifier
+		do ..write(cr_"<TestItemCode>")
+		do ..write(cr_"<SDACodingStandard>"_$$$OBXObservationIdentifierNameofCodingSystem(s)_"</SDACodingStandard>")
+		do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationIdentifieCodeSystemVersionId(s)_"</CodeSystemVersionId>")
+		
+		set codeChanged=0
+		if (type="NM") {
+			do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_"</Code>")
+			do ..write(cr_"<Description>"_$$$OBXObservationIdentifierText(s)_"</Description>")
+			do ..write(cr_"<IsNumeric>true</IsNumeric>")
+		}
+		elseif (type="CE")&&("/S/R/I/MS/VS/"'[("/"_flags_"/")) {  // ^pp this code does not work with > 1 flag
+			// Be careful here, we only want to tag on the SubId if there are duplicates for this TestItem
+			// Also, sometimes the SubID is blank and in those cases we don't want to loose rows of data.
+			// Also only want to tag on the SubIdfor the 2nd and subsequent use of it
+			If (TestItem($$$OBXObservationIdentifierIdentifier(s))=1)||('$d(TestItemUsed($$$OBXObservationIdentifierIdentifier(s)))) {
+				do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_"</Code>")
+				Set TestItemUsed($$$OBXObservationIdentifierIdentifier(s))=1
+				}
+			ElseIf $$$OBXObservationSubID'="" {do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_$$$OBXObservationSubID_"</Code>") set codeChanged=1}
+			Else {do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_s_"</Code>") set codeChanged=1}
+			do ..write(cr_"<Description>"_$$$OBXObservationIdentifierText(s)_"</Description>")
+		}
+		elseif (type="ST") {
+			// Be careful here, we only want to tag on the SubId if there are duplicates for this TestItem
+			// Also, sometimes the SubID is blank and in those cases we don't want to loose rows of data.
+			// Also only want to tag on the SubIdfor the 2nd and subsequent use of it
+			If (TestItem($$$OBXObservationIdentifierIdentifier(s))=1)||('$d(TestItemUsed($$$OBXObservationIdentifierIdentifier(s)))) {
+				do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_"</Code>")
+				Set TestItemUsed($$$OBXObservationIdentifierIdentifier(s))=1
+				}
+			ElseIf $$$OBXObservationSubID'="" {do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_$$$OBXObservationSubID_"</Code>") set codeChanged=1}
+			Else {do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_s_"</Code>") set codeChanged=1}
+			do ..write(cr_"<Description>"_$$$OBXObservationIdentifierText(s)_"</Description>")
+			do ..write(cr_"<IsNumeric>true</IsNumeric>")
+		}		
+		else {
+			// check if there are  notes/text for the same Test
+			// Addendum: only do this if compatibility mode is on
+			set identifier=$$$OBXObservationIdentifierIdentifier(s)_"^"_$$$OBXObservationIdentifierText(s)
+			Set previdentifier="" If s>1 Set previdentifier=$$$OBXObservationIdentifierIdentifier(s-1)_"^"_$$$OBXObservationIdentifierText(s-1)
+			If (previdentifier=identifier)&&(obxmode) {
+				do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_" Notes</Code>" )
+				set codeChanged=1
+				do ..write(cr_"<Description>"_$$$OBXObservationIdentifierText(s)_" Notes</Description>")
+			}
+			Else {
+				do ..write(cr_"<Code>"_$$$OBXObservationIdentifierIdentifier(s)_"</Code>")
+				do ..write(cr_"<Description>"_$$$OBXObservationIdentifierText(s)_"</Description>")
+			}
+		}
+		//Only parse the alternate code/desc/CS and OriginalText if we did NOT change the code of the primary
+		if 'codeChanged {
+			if ($$$OBXObservationIdentifierAltIdentifier(s)'="")||($$$OBXObservationIdentifierAltText(s)'="") {
+				do ..write(cr_"<PriorCodes>")
+				do ..write(cr_"<PriorCode>")
+				do ..write(cr_"<CodeSystem>"_$$$OBXObservationIdentifierAltNameofCodingSystem(s)_"</CodeSystem>")
+				do ..write(cr_"<Code>"_$$$OBXObservationIdentifierAltIdentifier(s)_"</Code>")
+				do ..write(cr_"<Description>"_$$$OBXObservationIdentifierAltText(s)_"</Description>")
+				do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationIdentifierAltCodeSystemVersionId(s)_"</CodeSystemVersionId>")
+				do ..write(cr_"<Type>A</Type>")
+				do ..write(cr_"</PriorCode>")
+				do ..write(cr_"</PriorCodes>")
+			}
+			if ($$$OBXObservationIdentifierOriginalText(s)'="") {
+				do ..write(cr_"<OriginalText>"_$$$OBXObservationIdentifierOriginalText(s)_"</OriginalText>")
+			}
+		}
+		do ..write(cr_"</TestItemCode>")
+		kill flags
+
+		#; OBX-4 : SubId
+		do ..write(cr_"<SubId>"_$$$OBXObservationSubID_"</SubId>")
+
+		#; OBX-5 : ObservationValue
+		do ..write(cr_"<ResultValue>")
+		set identifier=$$$OBXObservationIdentifierIdentifier(s)_"^"_$$$OBXObservationIdentifierText(s)
+		if "TX,FT"[type {  // Text or Formatted Text
+			do ..write("<![CDATA[")
+			for {
+				set %occ="" for {
+					set %occ=$$$OBXObservation(%occ) quit:%occ=""
+					do ..write(..unescape($$$OBXObservationValueNoCVT(%occ))_cr)
+				}
+				if '$$$IsFollowing("OBX") quit
+				if ($$$OBXObservationIdentifierIdentifier(s+1)_"^"_$$$OBXObservationIdentifierText(s+1))'=identifier quit
+				$$$GetFollowing("OBX")
+			}
+			do ..write("]]>")
+		} 
+		// special handling for CE, CNE, CWE, and SN, but only if not in compatibility mode
+		elseif ('obxmode)&&(",CE,CNE,CWE,SN,"[type) {
+			if type="SN" { do ..write($$$OBXObservationValueComparator_$$$OBXObservationValueNum1_$$$OBXObservationValueSeparatorSuffix_$$$OBXObservationValueNum2) }
+			else { do ..write($$$OBXObservationText) }
+		}
+		else {  // Single fields, possibly repeating
+			set %occ="" for {
+				set %occ=$$$OBXObservation(%occ) quit:%occ=""
+				if type="DT" { // Date
+					do ..write(..xmltimestamp($$$OBXObservationValue(%occ)))
+				} else { // Other
+					do ..write($$$OBXObservationValue(%occ))
+				}
+				quit  // only one
+			}
+		}
+		do ..write("</ResultValue>")
+		
+		#; J2 Added coded versions of results
+		#; Does not change how ResultValue is set in any way
+		do ..write("<ObservationValueType>"_type_"</ObservationValueType>")
+		if ("CE,CWE,CNE"[type&&($$$OBXObservationValueEDDataSubType'="")) {
+			do ..write(cr_"<ResultCodedValue>")
+			do ..write(cr_"<Code>"_$$$xml($$$OBXObservationValues)_"</Code>")
+			do ..write(cr_"<Description>"_$$$OBXObservationText_"</Description>")
+			do ..write(cr_"<SDACodingStandard>"_$$$OBXObservationValueEDDataSubType_"</SDACodingStandard>")
+			If ($$$OBXObservationValueEDEncoding'="")||($$$OBXObservationValueEDData'="") {
+				do ..write(cr_"<PriorCodes>")
+				do ..write(cr_"<PriorCode>")
+				do ..write(cr_"<Code>"_$$$OBXObservationValueEDEncoding_"</Code>")
+				do ..write(cr_"<Description>"_$$$OBXObservationValueEDData_"</Description>")
+				do ..write(cr_"<CodeSystem>"_$$$OBXObservationValueAltCodeSystem_"</CodeSystem>")
+				do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationValueAltCodeSystemVersion_"</CodeSystemVersionId>")
+				do ..write(cr_"<Type>A</Type>")
+				do ..write(cr_"</PriorCode>")
+				do ..write(cr_"</PriorCodes>")
+			}
+			do ..write("<CodeSystemVersionId>"_$$$OBXObservationValueCodeSystemVersion_"</CodeSystemVersionId>")
+			do ..write("<OriginalText>"_$$$OBXObservationValueOriginalText_"</OriginalText>")
+			do ..write(cr_"</ResultCodedValue>")
+		}
+		
+
+		#; OBX-6 : Units
+		do ..write(cr_"<ResultValueUnits>"_$$$OBXUnitsIdentifier_"</ResultValueUnits>")
+
+		#; OBX-7 : ReferencesRange
+		do ..write(cr_"<ResultNormalRange>"_$$$OBXReferencesRange_"</ResultNormalRange>")
+
+		#; OBX-11 : ObservationResultStatus
+		// if they send C, change it to K to avoid pipeline work
+		set itemstatus=$$$OBXObservationResultStatus
+		if itemstatus="C" set itemstatus="K"
+		do ..write(cr_"<TestItemStatus>"_itemstatus_"</TestItemStatus>")
+		kill itemstatus
+		
+		#; OBX-14 : DateTimeoftheObservation
+		do ..write(cr_"<ObservationTime>"_..xmltimestamp($$$OBXDateTimeoftheObservationTime)_"</ObservationTime>")
+		
+		#; OBX-15 : ProducersID - Must match OBX-23 if present
+		#; OBX-25 Performing Organization Medical Director 
+		do ..writePerformedAt()
+		
+		#; J2 PJH Additional ","
+		#; OBX-16 : ResponsibleObserver
+		set %occ="" for {
+			set %occ=$$$OBXResponsibleObserver(%occ) quit:%occ=""
+			do ..By("<EnteredBy>",,"User",
+				$$$OBXResponsibleObserverAssigningAuthority(%occ),
+				$$$OBXResponsibleObserverIDNumber(%occ),
+				$$$OBXResponsibleObserverFamilyNameSurname(%occ),
+				$$$OBXResponsibleObserverGivenName(%occ))
+			quit  // only one
+		}
+		// J2
+		#; OBX-17 : Observation Methods
+		do ..write(cr_"<ObservationMethods>")
+		set %occ="" for {
+			set %occ=$$$OBXObservationMethod(%occ) quit:%occ=""
+			do ..write(cr_"<ObservationMethod>")
+			do ..write(cr_"<Code>"_$$$OBXObservationMethodCodeIdentifier(%occ)_"</Code>")
+			do ..write(cr_"<Description>"_$$$OBXObservationMethodCodeText(%occ)_"</Description>")
+			do ..write(cr_"<SDACodingStandard>"_$$$OBXObservationMethodCodeNameofCodingSystem(%occ)_"</SDACodingStandard>")
+			do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationMethodCodeCodeSystemVersionId(%occ)_"</CodeSystemVersionId>")
+			if (($$$OBXObservationMethodCodeAltIdentifer(%occ)'="")||($$$OBXObservationMethodCodeAltText(%occ)'="")){
+				do ..write(cr_"<PriorCodes>")
+				do ..write(cr_"<PriorCode>")
+				do ..write(cr_"<Code>"_$$$OBXObservationMethodCodeAltIdentifer(%occ)_"</Code>")
+				do ..write(cr_"<Description>"_$$$OBXObservationMethodCodeAltText(%occ)_"</Description>")
+				do ..write(cr_"<CodeSystem>"_$$$OBXObservationMethodCodeAltNameofCodingSystem(%occ)_"</CodeSystem>")
+				do ..write(cr_"<CodeSystemVersionId>"_$$$OBXObservationMethodCodeAltCodeSystemVersionId(%occ)_"</CodeSystemVersionId>")
+				do ..write(cr_"<Type>A</Type>")
+				do ..write(cr_"</PriorCode>")
+				do ..write(cr_"</PriorCodes>")
+			}
+			do ..write(cr_"</ObservationMethod>")
+		}
+		do ..write(cr_"</ObservationMethods>")
+		// J2 PJH
+		#; OBX-19
+		do ..write(cr_"<AnalysisTime>"_..xmltimestamp($$$OBXDateTimeoftheAnalysisTime)_"</AnalysisTime>")
+
+
+		if $$$IsFollowing("NTE") do ..NTE()
+		
+		// Deal with the cases for NM where they send the same Code 
+		// with a different ValueType and different SubId to mean a comment	
+		// s is being saved while we look at the following segment details before setting it back.	
+		If ($$$OBXValueType="NM")&&($$$IsFollowing("OBX"))&&($$$OBXObservationSubID'="") {
+			Set saves=s, prevcode=$$$OBXObservationIdentifierIdentifier(s), prevsubid=$$$OBXObservationSubID
+			$$$GetFollowing("OBX")
+			If (prevcode=$$$OBXObservationIdentifierIdentifier(s))&&(prevsubid'=$$$OBXObservationSubID){			
+				// The line below is deliberate, because Studio is getting confused saving xml and 
+				// changing the text, nasty but hacks around problem
+				do ..write(cr_"<Comments><![CD"_"ATA[")
+				for {
+					set %occ="" for {
+						set %occ=$$$OBXObservation(%occ) quit:%occ=""
+						do ..write(..unescape($$$OBXObservationValueNoCVT(%occ))_cr)
+					}
+					if '$$$IsFollowing("OBX") quit
+					if ($$$OBXObservationIdentifierIdentifier(s+1)_"^"_$$$OBXObservationIdentifierText(s+1))'=identifier quit
+					$$$GetFollowing("OBX")
+				}
+				// next check it is not a nasty mix with NTEs at the end
+				// if it is then append them to the comments.
+				if $$$IsFollowing("NTE") {
+					$$$GetFollowing("NTE") 
+					set text=..gettext("NTE",3)
+					do ..write(text)
+				}
+				// The line below is deliberate, because Studio is getting confused saving xml and 
+				// changing the text, nasty but hacks around problem
+				do ..write("]"_"]></Comments>")
+			}	
+			Else {s s=saves}	
+
+		}
+		do ..write(cr_"</LabResultItem>")		
+	}  // Repeat for next OBX (group)
+	 
+ }
+}
+
+ClassMethod ORC(mode As %String)
+{
+ #; initialize
+ set (ordertype,resulttime,resultstatus,tReplace)=""
+ if mode="obs" {   // ORU OrderTypeIdentifier="OBS"
+	$$$Find("ORCOBS")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ORC(obs)","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+	#endif
+	do ..OBR("obs")
+	while $$$IsFollowing("TQ1") {$$$GetFollowing("TQ1")} // ignore any TQ1
+	while $$$IsFollowing("OBX") {do ..OBX("obs")} do ..end("OBX")
+	quit
+ }
+ elseif mode="med" {   // ORM Ordertype="MED"
+	$$$Find("ORCMED")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ORC(med)","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+	#endif
+	do ..start("ORCMED",cr_"<Medications>")
+	do ..write(cr_"<Medication>")
+	Do ..OnMedication()
+ }
+ elseif mode="ord" {   // ORM OrderType'="MED"
+	$$$Find("ORCORD")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ORC(ord)","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+	#endif
+	do ..StartOrder()
+ }
+ elseif mode="omp" {   // OMP_O09
+	$$$Find("ORCOMP")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ORC(omp)","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+	#endif
+	do ..start("ORCOMP",cr_"<Medications>")
+	do ..write(cr_"<Medication>")
+	Do ..OnMedication()
+ }
+ elseif mode="rde" {   //RDE_O11
+ 	$$$Find("ORCRDE")
+ 	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ORC(rde)","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+	#endif
+	do ..start("ORCRDE",cr_"<Medications>")
+	do ..write(cr_"<Medication>")
+	Do ..OnMedication()
+ }
+ elseif mode="vxu" {   // VXU_V04
+	$$$Find("ORC")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ORC(vxu)","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+	#endif
+		
+	do ..start("ORC",cr_"<Vaccinations>")
+	do ..write(cr_"<Vaccination>")
+	Do ..OnVaccination()
+ }
+ elseif mode="res" {   // ORU OrderTypeIdentifier'="OBS"
+	$$$Find("ORCRES")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("ORC(res)","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+	#endif
+
+	do ..StartOrder()
+	if ($zcvt($$$ORCOrderTypeIdentifier,"U")="LAB")&&($$$ORCNotAllText) {  // Atomic Results
+		set mode="lab"
+	} else {  // Text Results
+		set mode="txt"
+	}
+ }
+ do ..WriteEncounterNumber(encNum)
+ 
+ #; ORC-1 : OrderControl ("" means inactivate all, """" means delete all)
+ if $$$ORCOrderControl="""""" {
+	do ..RemoveOrder(mode,"I")
+	quit
+ }
+ elseif $$$ORCOrderControl="""""""""" {
+	do ..RemoveOrder(mode,"C")
+	quit
+ }
+  elseif $$$ORCOrderControl="R"&&(mode="lab") {
+	  //for atomic lab results, action code R means we are replacing the entire set of results
+	  do ..write(cr_"<ActionCode>R</ActionCode>")
+	  Set tReplace=1
+ }
+
+ #; ORC-2 : PlacerOrderNumber
+ do ..write(cr_"<PlacerId>"_$$$ORCPlacerOrderNumberEntityIdentifier_"</PlacerId>")
+ #; J2 -- add namespace and Universal ID
+ Set pfs=$$$ORCPlacerNamespace_"^"_$$$ORCPlacerUniversalID_"^"_$$$ORCPlacerUniversalIDType
+ do:pfs'="^^" ..write(cr_"<PlacerAssigningAuthority>"_pfs_"</PlacerAssigningAuthority>")
+ 
+ #; ORC-3 : FillerOrderNumber
+ do ..write(cr_"<FillerId>"_$$$ORCFillerOrderNumberEntityIdentifier_"</FillerId>")
+ #; J2 -- add namespace and Universal ID
+ Set pfs=$$$ORCFillerNamespace_"^"_$$$ORCFillerUniversalID_"^"_$$$ORCFillerUniversalIDType
+ do:pfs'="^^" ..write(cr_"<FillerAssigningAuthority>"_pfs_"</FillerAssigningAuthority>")
+ 
+ // J2 PJH
+ #; ORC-4 : Placer Group Number
+ do ..write(cr_"<GroupId>"_$$$ORCPlacerGroupNumberEntityIdentifier_"</GroupId>")
+ Set pfs=$$$ORCPlacerGroupNamespace_"^"_$$$ORCPlacerGroupUniversalID_"^"_$$$ORCPlacerGroupUniversalIDType
+ do:pfs'="^^" ..write(cr_"<GroupAssigningAuthority>"_pfs_"</GroupAssigningAuthority>")
+
+ #; ORC-5 : OrderStatus
+ do ..write(cr_"<Status>"_..orderstatus($$$ORCOrderStatus)_"</Status>")
+
+ #; ORC-7 : QuantityTiming (see also OBR-27, TQ1-2, -7, -8, -9, -10, -11, OBR-6)
+ set %occ="" for {
+	set %occ=$$$ORCQuantityTiming(%occ) quit:%occ=""
+	 
+	do ..write(cr_"<OrderQuantity>"_$$$ORCQuantityTimingQuantityQuantity(%occ)_"</OrderQuantity>")
+
+	if $$$ORCQuantityTimingDuration(%occ)'="" {
+		do ..write(cr_"<Duration>")
+		do ..write(cr_"<Code>"_$$$ORCQuantityTimingDuration(%occ)_"</Code>")
+		do ..write(cr_"</Duration>")
+	}
+	
+	do ..write(cr_"<FromTime>"_..xmltimestamp($$$ORCQuantityTimingStartDateTimeTime(%occ))_"</FromTime>")
+	do ..write(cr_"<ToTime>"_..xmltimestamp($$$ORCQuantityTimingEndDateTimeTime(%occ))_"</ToTime>")
+
+	if $$$ORCQuantityTimingPriority(%occ)'="" {
+		do ..write(cr_"<Priority>")
+		do ..write(cr_"<Code>"_$$$ORCQuantityTimingPriority(%occ)_"</Code>")
+		do ..write(cr_"</Priority>")
+	}
+
+	do ..write(cr_"<Condition>"_$$$ORCQuantityTimingCondition(%occ)_"</Condition>")
+	do ..write(cr_"<TextInstruction>"_$$$ORCQuantityTimingText(%occ)_"</TextInstruction>")
+
+	quit  // only one
+
+ }
+
+ #; ORC-9 : DateTimeofTransaction
+ do ..write(cr_"<EnteredOn>"_..xmltimestamp($$$ORCDateTimeofTransactionTime)_"</EnteredOn>")
+
+ #; J2 PJH - Additional ","
+ #; ORC-10 : EnteredBy
+ set %occ="" for {
+	set %occ=$$$ORCEnteredBy(%occ) quit:%occ=""
+	do ..By("<EnteredBy>",,"User",
+			$$$ORCEnteredByAssigningAuthority(%occ),
+			$$$ORCEnteredByIDNumber(%occ),
+	 		$$$ORCEnteredByFamilyNameSurname(%occ),
+	 		$$$ORCEnteredByGivenName(%occ))
+	quit  // only one
+ }
+
+ #; J2 PJH - Pass in Suffix
+ #; ORC-11 : VerifiedBy
+ set %occ="" for {
+	set %occ=$$$ORCVerifiedBy(%occ) quit:%occ=""
+	do ..By("<VerifiedBy>",,
+		"CareProvider",
+		$$$ORCVerifiedByAssigningAuthority(%occ),
+		$$$ORCVerifiedByIDNumber(%occ),
+		$$$ORCVerifiedByFamilyNameSurname(%occ),
+		$$$ORCVerifiedByGivenName(%occ),
+		$$$ORCVerifiedByMiddleName(%occ),
+		$$$ORCVerifiedByNamePrefix(%occ),
+		$$$ORCVerifiedByNameSuffix(%occ))
+	quit  // only one
+ }
+
+ #; J2 PJH Pass in Suffix
+ #; ORC-12 : OrderingProvider  (see RXO-14, OBR-16)
+ set %occ="" for {
+	set %occ=$$$ORCOrderingProvider(%occ) quit:%occ=""
+	if $$$ORCOrderingProviderIDNumber(%occ)'="" {
+		do ..By("<OrderedBy>",0,
+			"CareProvider",
+			$$$ORCOrderingProviderAssigningAuthority(%occ),
+			$$$ORCOrderingProviderIDNumber(%occ),
+			$$$ORCOrderingProviderFamilyNameSurname(%occ),
+			$$$ORCOrderingProviderGivenName(%occ),
+			$$$ORCOrderingProviderMiddleName(%occ),
+			$$$ORCOrderingProviderNamePrefix(%occ),
+			$$$ORCOrderingProviderNameSuffix(%occ),
+			$$$ORCOrderingProviderNameProfessionalSuffix(%occ))
+	#; ORC-24 : OrderingProviderAddress
+		do ..write(cr_"<Address>")	 
+		do ..write(cr_"<Street>")
+		do ..write($$$ORCOrderingProviderAddressStreetAddressStreetorMailingAddress(%occ))
+		if $$$ORCOrderingProviderAddressOtherDesignation(%occ)'="" {
+			do ..write("; "_$$$ORCOrderingProviderAddressOtherDesignation(%occ))}
+		do ..write("</Street>")
+		if $$$ORCOrderingProviderAddressCity(%occ)'="" {
+			do ..write(cr_"<City>")
+			do ..write(cr_"<Code>"_$$$ORCOrderingProviderAddressCity(%occ)_"</Code>")
+			do ..write(cr_"</City>")
+		}
+		if $$$ORCOrderingProviderAddressStateorProvince(%occ)'="" {
+			do ..write(cr_"<State>")
+			do ..write(cr_"<Code>"_$$$ORCOrderingProviderAddressStateorProvince(%occ)_"</Code>")
+			do ..write(cr_"</State>")
+		}
+		if $$$ORCOrderingProviderAddressZiporPostalCode(%occ)'="" {
+			do ..write(cr_"<Zip>")
+			do ..write(cr_"<Code>"_$$$ORCOrderingProviderAddressZiporPostalCode(%occ)_"</Code>")
+			do ..write(cr_"</Zip>")
+		}
+		if $$$ORCOrderingProviderAddressCountry(%occ)'="" {
+			do ..write(cr_"<Country>")
+			do ..write(cr_"<Code>"_$$$ORCOrderingProviderAddressCountry(%occ)_"</Code>")
+			do ..write(cr_"</Country>")
+		}
+		if $$$ORCOrderingProviderAddressCountyParishCode(%occ)'="" {
+			do ..write(cr_"<County>")
+			do ..write(cr_"<Code>"_$$$ORCOrderingProviderAddressCountyParishCode(%occ)_"</Code>")
+			do ..write(cr_"</County>")
+		}
+		do ..write(cr_"</Address>")
+		do ..write(cr_"</OrderedBy>")
+		quit  // only one
+	}
+ }
+
+ #; ORC-13 : EnterersLocation
+ if $$$ORCEnterersLocationPointofCare'="" {
+	do ..write(cr_"<EnteringOrganization>")
+	do ..write(cr_"<Code>"_$$$ORCEnterersLocationPointofCare_"</Code>")
+	do ..write(cr_"<Organization>")
+	do ..write(cr_"<Code>"_$$$MSHSendingFacilityNamespaceID_"</Code>")
+	do ..write(cr_"</Organization>")	 
+	do ..write(cr_"</EnteringOrganization>")
+ }
+
+ #; ORC-14 : CallBackPhoneNumber  (see OBR-17)
+ do ..PhonesAndEmail(s,14,.workphone,.workmobile,.workemail,.workfax)
+ set callback=""
+ set work=$tr(workphone,"^",",") if work'="" set callback=work
+ set mobile=$tr(workmobile,"^",",")
+ if mobile'="" {
+	if callback'="" set callback=callback_", "
+	set callback=callback_"Mobile: "_mobile
+ }
+ set fax=$tr(workfax,"^",",")
+ if fax'="" {
+	 if callback'="" set callback=callback_", "
+	 set callback=callback_"Fax: "_fax}
+ set email=$tr(workemail,"^",",")
+ if email'="" {
+	if callback'="" set callback=callback_", "
+	 set callback=callback_"email: "_email
+ }
+ do ..write(cr_"<CallbackNumber>"_..xml(callback)_"</CallbackNumber>")
+ kill callback,work,mobile,email
+
+ #; ORC-21 : OrderingFacilityName
+ set %occ="" for {
+	set %occ=$$$ORCOrderingFacilityName(%occ) quit:%occ=""
+	do ..write(cr_"<EnteredAt>")
+	#; J2 - Prefered Id is found in ORC-21.10 if not there default to ORC-21.3 per HL7 spec
+	if $$$ORCOrderingFacilityNameOrganizationIdentifier(%occ)'=""{
+		do ..write(cr_"<Code>"_$$$ORCOrderingFacilityNameOrganizationIdentifier(%occ)_"</Code>")
+	}Else{
+		do ..write(cr_"<Code>"_$$$ORCOrderingFacilityNameIDNumber(%occ)_"</Code>")
+	}
+	do ..write(cr_"<SDACodingStandard>"_$$$ORCOrderingFacilityNameAssigningAuthority(%occ)_"</SDACodingStandard>")
+	do ..write(cr_"<Description>"_$$$ORCOrderingFacilityNameOrganizationName(%occ)_"</Description>")
+	
+ #; ORC-22 : OrderingFacilityAddress
+	do ..write(cr_"<Address>")
+	do ..write(cr_"<Street>")
+	do ..write($$$ORCOrderingFacilityAddressStreetAddressStreetorMailingAddress(%occ))
+	if $$$ORCOrderingFacilityAddressOtherDesignation(%occ)'="" {
+		do ..write("; "_$$$ORCOrderingFacilityAddressOtherDesignation(%occ))}
+	do ..write("</Street>")
+	if $$$ORCOrderingFacilityAddressCity(%occ)'="" {
+		do ..write(cr_"<City>")
+		do ..write(cr_"<Code>"_$$$ORCOrderingFacilityAddressCity(%occ)_"</Code>")
+		do ..write(cr_"</City>")
+	}
+	if $$$ORCOrderingFacilityAddressStateorProvince(%occ)'="" {
+		do ..write(cr_"<State>")
+		do ..write(cr_"<Code>"_$$$ORCOrderingFacilityAddressStateorProvince(%occ)_"</Code>")
+		do ..write(cr_"</State>")
+	}
+	if $$$ORCOrderingFacilityAddressZiporPostalCode(%occ)'="" {
+		do ..write(cr_"<Zip>")
+		do ..write(cr_"<Code>"_$$$ORCOrderingFacilityAddressZiporPostalCode(%occ)_"</Code>")
+		do ..write(cr_"</Zip>")
+	}
+	if $$$ORCOrderingFacilityAddressCountry(%occ)'="" {
+		do ..write(cr_"<Country>")
+		do ..write(cr_"<Code>"_$$$ORCOrderingFacilityAddressCountry(%occ)_"</Code>")
+		do ..write(cr_"</Country>")
+	}
+	if $$$ORCOrderingFacilityAddressCountyParishCode(%occ)'="" {
+		do ..write(cr_"<County>")
+		do ..write(cr_"<Code>"_$$$ORCOrderingFacilityAddressCountyParishCode(%occ)_"</Code>")
+		do ..write(cr_"</County>")
+	}
+	do ..write(cr_"</Address>")
+
+ #; ORC-23 : OrderingFacilityPhoneNumber
+	do ..PhonesAndEmail(s,23,.workphone,.workmobile,.workemail)
+	do ..write(cr_"<ContactInfo>")
+	do ..write(cr_"<WorkPhoneNumber>"_..xml($p(workphone,"^",1))_"</WorkPhoneNumber>")
+	do ..write(cr_"<MobilePhoneNumber>"_..xml($p(workmobile,"^",1))_"</MobilePhoneNumber>")
+	do ..write(cr_"<EmailAddress>"_..xml($p(workemail,"^",1))_"</EmailAddress>")
+	do ..write(cr_"</ContactInfo>")
+
+	do ..write(cr_"</EnteredAt>")
+	quit  // only one	 
+ }
+ #; ORC-28 : ConfidentialityCode 
+ if ($$$ORCConfidentialityCodeIdentifier'="")||
+    ($$$ORCConfidentialityCodeText'="") {
+	do ..write(cr_"<ConfidentialityCode>")
+	do ..write(cr_"<SDACodingStandard>"_$$$ORCConfidentialityCodenameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$ORCConfidentialityCodeIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$ORCConfidentialityCodeText_"</Description>")
+	do ..write(cr_"</ConfidentialityCode>")
+ }
+
+ #; ORC-29 : OrderType  (see OBR-4, GetData)
+ set ordertype=$zcvt($$$ORCOrderTypeIdentifier,"U")
+ if (ordertype="")||(",LAB,RAD,MED,VXU,OTH,"'[(","_ordertype_",")) {set ordertype="OTH"}
+
+
+ #; --------- end of ORC, now process the body of the order ----------
+
+ if mode="med" {   // ORM Ordertype="MED"
+	set ordertype="MED"
+	if $$$IsFollowing("RXO") {do ..RXO()}
+	if $$$IsFollowing("NTE") {do ..NTE()}
+ }
+ elseif mode="ord" {   // ORM OrderType'="MED", only allow LAB, RAD or OTH for now
+	if (ordertype'="LAB")&&(ordertype'="RAD") set ordertype="OTH"
+	if $$$IsFollowing("OBR") {do ..OBR(mode)}
+	if $$$IsFollowing("NTE") {do ..NTE()}
+ }
+ elseif mode="omp" {   // OMP_O09
+ 	set ordertype="MED"
+ 	while $$$IsFollowing("TQ1") {do ..TQ1()}
+	if $$$IsFollowing("RXO") {do ..RXO()}
+	if $$$IsFollowing("NTE") {do ..NTE()}
+ }
+ elseif mode="vxu" {   // VXU_V04
+	set ordertype="VXU"
+	if $$$IsFollowing("TQ1") {do ..TQ1()}  // 0-1 for now
+	if $$$IsFollowing("RXA") {do ..RXA(mode)}
+
+	// J2 PJH - Ensure vxu can have RXR
+	if $$$IsFollowing("RXR") {do ..RXR()}
+
+	// J2 PJH - add obx
+	while $$$IsFollowing("OBX") {do ..OBX("vxu")} do ..end("OBX")
+
+ }
+ elseif mode="rde" {   // RDE_O11
+ 	set ordertype="MED"
+ 	if $$$IsFollowing("RXE") {do ..RXE()}
+ 	if $$$IsFollowing("NTE") {do ..NTE()}
+ 	if $$$IsFollowing("TQ1") {do ..TQ1()}
+	if $$$IsFollowing("RXR") {do ..RXR()}
+	while $$$IsFollowing("RXC") {do ..RXC()} do ..end("RXC")
+ }
+ elseif mode="lab" {   // ORU OrderTypeIdentifier'="OBS", Atomic results
+ 	set orcsave = s
+	do ..OBR("lab")
+ 
+	//if $$$IsFollowing("OBR") {do ..OBR("lab")}
+	// Don't process the NTE's at this point for a result
+	// If they are in an ORU, assume they are ResultComments, rather than OrderComments
+	//  if $$$IsFollowing("NTE") {do ..NTE()}
+ }
+ elseif mode="txt" {   // ORU OrderTypeIdentifier'="OBS", Text results
+	if $$$IsFollowing("OBR") {do ..OBR("txt")}
+	if $$$IsFollowing("NTE") {do ..NTE()}
+ }
+
+ #; --------- end of body, now close the order -----------
+
+ if mode="med" {   // ORM Ordertype="MED"
+	do ..write(cr_"</Medication>")
+ }
+ if mode="omp" {   // OMP_O09
+	do ..write(cr_"</Medication>")
+ }
+ if mode="rde" {   //RDE_O11
+ #; Add sending system
+ 	do ..SendingSystem()
+ 	do ..write(cr_"</Medication>")
+ }
+ if mode="vxu" {   // VXU_V04
+ 	do ..write(cr_"</Vaccination>")
+	// J2 PJH - Process results/observations
+	;while $$$IsFollowing("OBX") {do ..OBX("vxu")} do ..end("OBX")
+
+ }
+ if (mode="lab")||(mode="txt") {   // ORU OrderTypeIdentifier'="OBS"
+ 	do ..write(cr_"<Result>")
+	while $$$IsFollowing("TQ1") {$$$GetFollowing("TQ1")} // ignore any TQ1
+ }
+
+ #; -------- process results -----------------------------
+
+ if mode="lab" {   // ORU OrderTypeIdentifier'="OBS", Atomic results
+	do ..write(cr_"<ResultType>AT</ResultType>")
+	// we have done the OBR, so now check for NTE's after the OBR, before the OBX(s)
+	// These should be ResultComments, rather than OrderComments
+	if $$$IsFollowing("NTE") {do ..NTE()}
+	// There may be TQ1s after the NTEs. If so, remember the seg # to process them later
+	if $$$IsFollowing("TQ1") { 
+		set tq1s = s
+		// advance the context
+		while $$$IsFollowing("TQ1") { $$$GetFollowing("TQ1") }
+	} 
+	else { set tq1s = "" }
+
+	if resulttime'="" {
+		do ..write(cr_"<ResultTime>"_..xmltimestamp(resulttime)_"</ResultTime>")
+	}
+	if resultstatus'="" {
+		do ..write(cr_"<ResultStatus>"_resultstatus_"</ResultStatus>")
+	}
+	do ..write(cr_"<ResultItems>")
+	do ..OBX("lab",tReplace) // handle all following OBX's + NTE
+	do ..write(cr_"</ResultItems>")
+	do ..write(cr_"</Result>")
+	if (tq1s '= "") { 
+		set saves = s
+		set s = tq1s
+		while $$$IsFollowing("TQ1") { do ..TQ1() }
+		set s = saves
+		kill saves
+	}
+ }
+
+ if mode="txt" {   // ORU OrderTypeIdentifier'="OBS", Text results
+ 	// technically there can be NTEs preceding any TQ1s, but we do not expect them on a text result
+ 	while $$$IsFollowing("TQ1") { do ..TQ1() }
+	if resulttime'="" {
+		do ..write(cr_"<ResultTime>"_..xmltimestamp(resulttime)_"</ResultTime>")
+		do ..write(cr_"<AuthorizationTime>"_..xmltimestamp(resulttime)_"</AuthorizationTime>")
+		
+	}
+	if resultstatus'="" {
+		do ..write(cr_"<ResultStatus>"_resultstatus_"</ResultStatus>")
+	}
+	
+	do ..OBX("txt") // handle all following OBX's + NTE
+	do ..write(cr_"</Result>")
+ }
+  #; J2
+  If ($$$IsFollowing("SPM")){
+	 do ..write(cr_"<Specimens>")
+	 while $$$IsFollowing("SPM") { do ..SPM() }
+	 do ..end("SPM")
+	 do ..write(cr_"</Specimens>")
+  }
+ if ((mode="lab")&&($$$Next("OBR"))&&($$$Next("ORCRES")="")) {
+  set s = orcsave //rewind to replay ORC
+  Set ^||HS.Data("ORCRES")=$o(^||HS.Data("ORCRES",^||HS.Data("ORCRES")),-1) 
+  do ..ORC("res")
+ }
+}
+
+ClassMethod PID()
+{
+ $$$Find("PID")
+ #if $$$HSDebug
+	do ##class(HS.Util.HSDebug).Debug("PID","HS.Gateway.HL7.HL7ToSDA","txt",s)
+ #endif
+
+ set (ssn,dl,mrn)=""
+ do ..start("PID",cr_"<Patient>")
+ do ..write(cr_"<PatientNumbers>")
+
+ #; PID-2 : PatientID
+ if ($$$PIDPatientID'="")&&
+	((..idtype($$$PIDPatientIDIdentifierTypeCode)="MRN")||
+	 (..idtype($$$PIDPatientIDIdentifierTypeCode)="")) {
+	do ..write(cr_"<PatientNumber>")
+	set mrn = $$$PIDPatientIDIDNumber
+	do ..write(cr_"<Number>"_mrn_"</Number>")
+	do ..write(cr_"<NumberType>MRN</NumberType>")
+	set orgCode=$$$PIDPatientIDAssigningAuthorityNamespaceID
+	if orgCode="" set orgCode=$$$MSHSendingFacilityNamespaceID
+	if orgCode'="" {
+		do ..write(cr_"<Organization>")
+		do ..write(cr_"<Code>"_orgCode_"</Code>")
+		do ..write(cr_"</Organization>")
+	}
+	do ..write(cr_"<ISOAssigningAuthority>"_$$$PIDPatientIDAssigningAuthority_"</ISOAssigningAuthority>")
+	do ..write(cr_"</PatientNumber>")
+ }
+
+ #; PID-3 : PatientIdentifierList
+ set %occ="" for {
+	set %occ=$$$PIDPatientIdentifierList(%occ) quit:%occ=""	 
+	do ..write(cr_"<PatientNumber>")
+	do ..write(cr_"<Number>"_$$$PIDPatientIdentifierListIDNumber(%occ)_"</Number>")
+	set numbertype=..idtype($$$PIDPatientIdentifierListIdentifierTypeCode(%occ))
+	if numbertype="SSN" set ssn=$$$PIDPatientIdentifierListIDNumber(%occ)
+	if numbertype="DL" set dl=$$$PIDPatientIdentifierListIDNumber(%occ)
+	if numbertype="MRN",mrn="" set mrn=$$$PIDPatientIdentifierListIDNumber(%occ)
+	do ..write(cr_"<NumberType>"_numbertype_"</NumberType>")
+	set orgCode=$$$PIDPatientIdentifierListAssigningAuthorityNamespaceID(%occ)
+	//
+	if (orgCode="")&&((numbertype="MRN")||(numbertype="")) {
+		set orgCode=$$$MSHSendingFacilityNamespaceID}
+	if orgCode'="" {
+		do ..write(cr_"<Organization>")
+		do ..write(cr_"<Code>"_orgCode_"</Code>")
+		do ..write(cr_"</Organization>")
+	}
+	do ..write(cr_"<ISOAssigningAuthority>"_$$$PIDPatientIdentifierListAssigningAuthority(%occ)_"</ISOAssigningAuthority>")
+	do ..write(cr_"</PatientNumber>")
+ }
+
+ #; PID-4 : AlternatePatientIDPID
+ set %occ="" for {
+	set %occ=$$$PIDAlternatePatientIDPID(%occ) quit:%occ=""	 
+	do ..write(cr_"<PatientNumber>")
+	do ..write(cr_"<Number>"_$$$PIDAlternatePatientIDPIDIDNumber(%occ)_"</Number>")
+	set numbertype=..idtype($$$PIDAlternatePatientIDPIDIdentifierTypeCode(%occ))
+	if numbertype="SSN",ssn="" set ssn=$$$PIDAlternatePatientIDPIDIDNumber(%occ)
+	if numbertype="DL",dl="" set dl=$$$PIDAlternatePatientIDPIDIDNumber(%occ)
+	if numbertype="MRN",mrn="" set mrn=$$$PIDAlternatePatientIDPIDIDNumber(%occ)
+	do ..write(cr_"<NumberType>"_..idtype($$$PIDAlternatePatientIDPIDIdentifierTypeCode(%occ))_"</NumberType>")
+	set orgCode=$$$PIDAlternatePatientIDPIDAssigningAuthorityNamespaceID(%occ)
+
+	if (orgCode="")&&((numbertype="MRN")||(numbertype="")) {
+		set orgCode=$$$MSHSendingFacilityNamespaceID}
+	if orgCode'="" {
+		do ..write(cr_"<Organization>")
+		do ..write(cr_"<Code>"_orgCode_"</Code>")
+		do ..write(cr_"</Organization>")
+	}
+	do ..write(cr_"<ISOAssigningAuthority>"_$$$PIDAlternatePatientIDAssigningAuthority(%occ)_"</ISOAssigningAuthority>")
+	do ..write(cr_"</PatientNumber>")
+ }
+
+ #; PID-19 : SSNNumberPatient
+ #;  value from PID-3 or PID-4 overrides
+ if $$$PIDSSNNumberPatient'="",ssn="" {
+	do ..write(cr_"<PatientNumber>")
+	set ssn=$$$PIDSSNNumberPatient
+	do ..write(cr_"<Number>"_ssn_"</Number>")
+	do ..write(cr_"<NumberType>SSN</NumberType>")
+	do ..write(cr_"</PatientNumber>")
+ }
+
+ #; PID-20 : DriversLicenseNumberPatient
+ #;  value from PID-3 or PID-4 overrides
+ if $$$PIDDriversLicenseNumberPatientLicenseNumber'="",dl="" {
+	do ..write(cr_"<PatientNumber>")
+	set dl=$$$PIDDriversLicenseNumberPatientLicenseNumber
+	do ..write(cr_"<Number>"_dl_"</Number>")
+	do ..write(cr_"<NumberType>DL</NumberType>")
+	do ..write(cr_"<Organization>")
+	do ..write(cr_"<Code>"_$$$PIDDriversLicenseNumberPatientIssuingStateProvinceCountry_"</Code>")
+	do ..write(cr_"</Organization>")
+	do ..write(cr_"</PatientNumber>")
+ }
+
+ do ..write(cr_"</PatientNumbers>")
+
+#;PID-5.7 : Check PatientNameType for blank name and display name (Used last)
+ Set tUnknownName=""
+ Set tPreferredName=""
+ Set tPreferredNameSurname=""
+ Set tPreferredNameSurnamePrefix=""
+ Set tPreferredNameGivenName=""
+ Set tPreferredNameMiddleName=""
+ Set tPreferredNameSuffix=""
+ Set tPreferredNamePrefix=""
+ Set tPreferredNameProfessionalSuffix=""
+ 
+ Set %occ="" for {
+	Set %occ=$$$PIDPatientName(%occ) quit:%occ=""
+	Set tNameType=$$$PIDPatientNameCodeType(%occ)
+	If tNameType="U" {
+		Set tUnknownName="U"
+	}Elseif tNameType="S" {
+		Set tUnknownName="S"
+	}Elseif tNameType="D" {
+		// set tPreferredName (if provided) to Last, First Middle
+		Set tPreferredName=$$$PIDPatientNameFamilyNameSurname(%occ)_", "_$$$PIDPatientNameGivenName(%occ)_" "_$$$PIDPatientNameSecondandFurtherGivenNamesor(%occ)
+		
+		// Preferred Name Extension
+		Set tPreferredNameSurname=$$$PIDPatientNameFamilyNameSurname(%occ)
+		Set tPreferredNameSurnamePrefix=$$$PIDPatientNameFamilyNameOwnSurnamePrefix(%occ)
+		Set tPreferredNameGivenName=$$$PIDPatientNameGivenName(%occ)
+		Set tPreferredNameMiddleName=$$$PIDPatientNameSecondandFurtherGivenNamesor(%occ)
+		Set tPreferredNameSuffix=$$$PIDPatientNameSuffix(%occ)
+		Set tPreferredNamePrefix=$$$PIDPatientNamePrefix(%occ)
+		Set tPreferredNameProfessionalSuffix=$$$PIDPatientNameProfessionalSuffix(%occ)
+	}
+}
+
+ #; PID-5 : PatientName
+ set %occ="" for {
+	set %occ=$$$PIDPatientName(%occ) quit:%occ=""
+	#; J2 added skip of Type=A (Alias) - handled in Aliases section
+	#; J2 added skip of Type=D (Display name) - set as PreferredName inside Name section
+	if ($$$PIDPatientNameCodeType(%occ)'="A")&&($$$PIDPatientNameCodeType(%occ)'="D") {
+		do ..write(cr_"<Name>")
+		do ..write(cr_"<GivenName>"_$$$PIDPatientNameGivenName(%occ)_"</GivenName>")
+		do ..write(cr_"<FamilyName>"_$$$PIDPatientNameFamilyNameSurname(%occ)_"</FamilyName>")
+		do ..write(cr_"<FamilyNamePrefix>"_$$$PIDPatientNameFamilyNameOwnSurnamePrefix(%occ)_"</FamilyNamePrefix>")
+		do ..write(cr_"<MiddleName>"_$$$PIDPatientNameSecondandFurtherGivenNamesor(%occ)_"</MiddleName>")
+		do ..write(cr_"<NamePrefix>"_$$$PIDPatientNamePrefix(%occ)_"</NamePrefix>")
+		do ..write(cr_"<NameSuffix>"_$$$PIDPatientNameSuffix(%occ)_"</NameSuffix>")
+		do ..write(cr_"<ProfessionalSuffix>"_$$$PIDPatientNameProfessionalSuffix(%occ)_"</ProfessionalSuffix>")
+		if tPreferredName'="" {
+			do ..write(cr_"<PreferredName>"_tPreferredName_"</PreferredName>")
+			// Preferred Name Extension			
+			do ..write(cr_"<Extension>")		
+				do ..write(cr_"<PreferredName>")
+				do ..write(cr_"<Name>")
+				do ..write(cr_"<GivenName>"_tPreferredNameGivenName_"</GivenName>")
+				do ..write(cr_"<FamilyName>"_tPreferredNameSurname_"</FamilyName>")
+				do ..write(cr_"<FamilyNamePrefix>"_tPreferredNameSurnamePrefix_"</FamilyNamePrefix>")
+				do ..write(cr_"<MiddleName>"_tPreferredNameMiddleName_"</MiddleName>")
+				do ..write(cr_"<NamePrefix>"_tPreferredNamePrefix_"</NamePrefix>")
+				do ..write(cr_"<NameSuffix>"_tPreferredNameSuffix_"</NameSuffix>")
+				do ..write(cr_"<ProfessionalSuffix>"_tPreferredNameProfessionalSuffix_"</ProfessionalSuffix>")
+				do ..write(cr_"</Name>")
+				do ..write(cr_"</PreferredName>")
+			do ..write(cr_"</Extension>")
+		}
+		do ..write(cr_"</Name>")
+		quit  // only one
+	}
+}
+
+ If tUnknownName'="" {
+	do ..write(cr_"<BlankNameReason>"_tUnknownName_"</BlankNameReason>")
+ }
+
+ #; PID-6 : MothersMaidenName
+ set %occ="" for {
+	set %occ=$$$PIDMother(%occ) quit:%occ=""	 
+	do ..write(cr_"<MothersMaidenName>"_$$$PIDMothersMaidenNameSurname(%occ)_"</MothersMaidenName>")
+	do ..write(cr_"<MothersFullName>")
+		do ..write(cr_"<GivenName>"_$$$PIDMothersMaidenNameGivenName(%occ)_"</GivenName>")
+		do ..write(cr_"<FamilyName>"_$$$PIDMothersMaidenNameSurname(%occ)_"</FamilyName>")
+		do ..write(cr_"<FamilyNamePrefix>"_$$$PIDMothersMaidenNameFamilyNameOwnSurnamePrefix(%occ)_"</FamilyNamePrefix>")
+		do ..write(cr_"<MiddleName>"_$$$PIDMothersMaidenNameSecondandFurtherGivenNamesor(%occ)_"</MiddleName>")
+		do ..write(cr_"<NamePrefix>"_$$$PIDMothersMaidenNamePrefix(%occ)_"</NamePrefix>")
+		do ..write(cr_"<NameSuffix>"_$$$PIDMothersMaidenNameSuffix(%occ)_"</NameSuffix>")
+		do ..write(cr_"<ProfessionalSuffix>"_$$$PIDMothersMaidenNameProfessionalSuffix(%occ)_"</ProfessionalSuffix>")
+	do ..write(cr_"</MothersFullName>")
+	quit  // only one
+ }
+
+ #; PID-7 : DateTimeofBirth
+ do ..write(cr_"<BirthTime>"_..xmltimestamp($$$PIDDateTimeofBirthTime)_"</BirthTime>")
+
+ #; PID-8 : AdministrativeSex
+ if $$$PIDAdministrativeSex'="" {
+	do ..write(cr_"<Gender>")
+	do ..write(cr_"<Code>"_$$$PIDAdministrativeSex_"</Code>")
+	do ..write(cr_"</Gender>")
+ }
+
+ #; PID-9 : PatientAlias
+ do ..write(cr_"<Aliases>")	 
+ set %occ="" for {
+	set %occ=$$$PIDPatientAlias(%occ) quit:%occ=""
+	do ..write(cr_"<Name>")
+	do ..write(cr_"<GivenName>"_$$$PIDPatientAliasGivenName(%occ)_"</GivenName>")
+	do ..write(cr_"<FamilyName>"_$$$PIDPatientAliasFamilyNameSurname(%occ)_"</FamilyName>")
+	do ..write(cr_"<FamilyNamePrefix>"_$$$PIDPatientAliasFamilyNameOwnSurnamePrefix(%occ)_"</FamilyNamePrefix>")
+	do ..write(cr_"<MiddleName>"_$$$PIDPatientAliasSecondandFurtherGivenNamesor(%occ)_"</MiddleName>")
+	do ..write(cr_"<NamePrefix>"_$$$PIDPatientAliasPrefix(%occ)_"</NamePrefix>")
+	do ..write(cr_"<NameSuffix>"_$$$PIDPatientAliasSuffix(%occ)_"</NameSuffix>")
+	do ..write(cr_"<ProfessionalSuffix>"_$$$PIDPatientAliasProfessionalSuffix(%occ)_"</ProfessionalSuffix>")
+	do ..write(cr_"</Name>")
+ }
+ 
+ #; J2 if PID-5.7 = A it is an alias
+ set %occ="" for {
+	set %occ=$$$PIDPatientName(%occ) quit:%occ=""	 
+	if ($$$PIDPatientNameCodeType(%occ)="A"){ // Type of Alias -- add to Aliases
+		do ..write(cr_"<Name>")
+		do ..write(cr_"<GivenName>"_$$$PIDPatientNameGivenName(%occ)_"</GivenName>")
+		do ..write(cr_"<FamilyName>"_$$$PIDPatientNameFamilyNameSurname(%occ)_"</FamilyName>")
+		do ..write(cr_"<FamilyNamePrefix>"_$$$PIDPatientNameFamilyNameOwnSurnamePrefix(%occ)_"</FamilyNamePrefix>")
+		do ..write(cr_"<MiddleName>"_$$$PIDPatientNameSecondandFurtherGivenNamesor(%occ)_"</MiddleName>")
+		do ..write(cr_"<NamePrefix>"_$$$PIDPatientNamePrefix(%occ)_"</NamePrefix>")
+		do ..write(cr_"<NameSuffix>"_$$$PIDPatientNameSuffix(%occ)_"</NameSuffix>")
+		do ..write(cr_"<ProfessionalSuffix>"_$$$PIDPatientNameProfessionalSuffix(%occ)_"</ProfessionalSuffix>")
+		do ..write(cr_"</Name>")
+	}
+ }
+ 
+ do ..write(cr_"</Aliases>")	
+
+ #; PID-10 : Race
+ set %occ="",tGotRace=0 for {
+	set %occ=$$$PIDRace(%occ) quit:%occ=""
+	if ($$$PIDRaceIdentifier(%occ)'="")||($$$PIDRaceText(%occ)'="") {
+		If 'tGotRace {
+			//for compatibility, populate the older single instance property with the first race
+			do ..write(cr_"<Race>")
+			do ..write(cr_"<SDACodingStandard>"_$$$PIDRaceNameofCodingSystem(%occ)_"</SDACodingStandard>")
+			do ..write(cr_"<Code>"_$$$PIDRaceIdentifier(%occ)_"</Code>")
+			do ..write(cr_"<Description>"_$$$PIDRaceText(%occ)_"</Description>")
+			do ..write(cr_"<CodeSystemVersionId>"_$$$PIDRaceCodeSystemVersionId(%occ)_"</CodeSystemVersionId>")
+			do ..write(cr_"</Race>")
+			do ..write(cr_"<Races>")
+			Set tGotRace=1
+		}
+		do ..write(cr_"<Race>")
+		do ..write(cr_"<SDACodingStandard>"_$$$PIDRaceNameofCodingSystem(%occ)_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$PIDRaceIdentifier(%occ)_"</Code>")
+		do ..write(cr_"<Description>"_$$$PIDRaceText(%occ)_"</Description>")
+		do ..write(cr_"<CodeSystemVersionId>"_$$$PIDRaceCodeSystemVersionId(%occ)_"</CodeSystemVersionId>")
+		do ..write(cr_"</Race>")
+	}
+ }
+ If tGotRace do ..write(cr_"</Races>")
+
+ #; PID-11 : PatientAddress
+ do ..write(cr_"<Addresses>")
+ set %occ="" for {
+	set %occ=$$$PIDPatientAddress(%occ) quit:%occ=""
+	do ..write(cr_"<Address>")	 
+	do ..write(cr_"<Street>")
+	do ..write($$$PIDPatientAddressStreetAddressStreetorMailingAddress(%occ))
+	if $$$PIDPatientAddressOtherDesignation(%occ)'="" {
+		do ..write("; "_$$$PIDPatientAddressOtherDesignation(%occ))}
+	do ..write("</Street>")
+	if $$$PIDPatientAddressCity(%occ)'="" {
+		do ..write(cr_"<City>")
+		do ..write(cr_"<Code>"_$$$PIDPatientAddressCity(%occ)_"</Code>")
+		do ..write(cr_"</City>")
+	}
+	if $$$PIDPatientAddressStateorProvince(%occ)'="" {
+		do ..write(cr_"<State>")
+		do ..write(cr_"<Code>"_$$$PIDPatientAddressStateorProvince(%occ)_"</Code>")
+		do ..write(cr_"</State>")
+	}
+	if $$$PIDPatientAddressZiporPostalCode(%occ)'="" {
+		do ..write(cr_"<Zip>")
+		do ..write(cr_"<Code>"_$$$PIDPatientAddressZiporPostalCode(%occ)_"</Code>")
+		do ..write(cr_"</Zip>")
+	}
+	if $$$PIDPatientAddressCountry(%occ)'="" {
+		do ..write(cr_"<Country>")
+		do ..write(cr_"<Code>"_$$$PIDPatientAddressCountry(%occ)_"</Code>")
+		do ..write(cr_"</Country>")
+	}
+	if $$$PIDPatientAddressCountyParishCode(%occ)'="" {
+		do ..write(cr_"<County>")
+		do ..write(cr_"<Code>"_$$$PIDPatientAddressCountyParishCode(%occ)_"</Code>")
+		do ..write(cr_"</County>")
+	}
+	do ..write(cr_"<FromTime>"_..xmltimestamp($$$PIDPatientAddressEffectiveDateTime(%occ))_"</FromTime>")
+	do ..write(cr_"<ToTime>"_..xmltimestamp($$$PIDPatientAddressExpirationDateTime(%occ))_"</ToTime>")
+	// Address Extension
+	if $$$PIDPatientAddressType(%occ) '="" {
+		do ..write(cr_"<Extension>")
+		do ..write(cr_"<AddressType>"_$$$PIDPatientAddressType(%occ)_"</AddressType>")
+		do ..write(cr_"</Extension>")
+	}
+	do ..write(cr_"</Address>")
+ }
+ do ..write(cr_"</Addresses>")	 
+
+ #; PID-13 : PhoneNumberHome
+ #; PID-14 : PhoneNumberBusiness
+ do ..PhonesAndEmail(s,13,.homephone,.homemobile,.homeemail)
+ do ..PhonesAndEmail(s,14,.workphone,.workmobile,.workemail)
+ set home=$p(homephone,"^",1),work=$p(workphone,"^",1)
+ set mobile=$p(homemobile,"^",1) if mobile="" set mobile=$p(workmobile,"^",1)
+ set email=$p(homeemail,"^",1) if email="" set email=$p(workemail,"^",1)
+ do ..write(cr_"<ContactInfo>")
+ do ..write(cr_"<HomePhoneNumber>"_..xml(home)_"</HomePhoneNumber>")
+ do ..write(cr_"<WorkPhoneNumber>"_..xml(work)_"</WorkPhoneNumber>")
+ do ..write(cr_"<MobilePhoneNumber>"_..xml(mobile)_"</MobilePhoneNumber>")
+ do ..write(cr_"<EmailAddress>"_..xml(email)_"</EmailAddress>")
+ do ..write(cr_"</ContactInfo>")
+ kill home,mobile,email
+
+ #; PID-15 : PrimaryLanguage
+ if ($$$PIDPrimaryLanguageIdentifier'="")||($$$PIDPrimaryLanguageText'="") {
+	do ..write(cr_"<PrimaryLanguage>")
+	do ..write(cr_"<SDACodingStandard>"_$$$PIDPrimaryLanguageNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$PIDPrimaryLanguageIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$PIDPrimaryLanguageText_"</Description>")
+	do ..write(cr_"</PrimaryLanguage>")
+ }
+
+ #; PID-16 : MaritalStatus
+ if ($$$PIDMaritalStatusIdentifier'="")||($$$PIDMaritalStatusText'="") {
+	do ..write(cr_"<MaritalStatus>")
+	do ..write(cr_"<SDACodingStandard>"_$$$PIDMaritalStatusNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$PIDMaritalStatusIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$PIDMaritalStatusText_"</Description>")
+	do ..write(cr_"</MaritalStatus>")
+ }
+
+ #; PID-17 : Religion
+ if ($$$PIDReligionIdentifier'="")||($$$PIDReligionText'="") {
+	do ..write(cr_"<Religion>")
+	do ..write(cr_"<SDACodingStandard>"_$$$PIDReligionNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$PIDReligionIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$PIDReligionText_"</Description>")
+	do ..write(cr_"</Religion>")
+ }
+
+ #; PID-18 : PatientAccountNumber - see PV1
+ set accountnumber=$$$PIDPatientAccountNumber
+ #; PID-19 : SSNNumberPatient - see above
+ #; PID-20 : DriversLicenseNumberPatient - see above
+ 
+ #; PID-22 : EthnicGroup
+ set %occ="" for {
+	set %occ=$$$PIDEthnicGroup(%occ) quit:%occ=""
+	if ($$$PIDEthnicGroupIdentifier(%occ)'="")||($$$PIDEthnicGroupText(%occ)'="") {
+		do ..write(cr_"<EthnicGroup>")
+		do ..write(cr_"<SDACodingStandard>"_$$$PIDEthnicGroupNameofCodingSystem(%occ)_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$PIDEthnicGroupIdentifier(%occ)_"</Code>")
+		do ..write(cr_"<Description>"_$$$PIDEthnicGroupText(%occ)_"</Description>")
+		do ..write(cr_"<CodeSystemVersionId>"_$$$PIDEthnicGroupCodeSystemVersionId(%occ)_"</CodeSystemVersionId>")
+		do ..write(cr_"</EthnicGroup>")
+	}
+	quit  // only one
+ }
+ 
+ #; PID-24 : MultipleBirthIndicator
+ #; PID-25 : BirthOrder
+ if ($ZCVT($E($$$PIDMultipleBirthIndicator,1),"U")="N") { do ..write(cr_"<BirthOrder>0</BirthOrder>") }
+ else { do ..write(cr_"<BirthOrder>"_$$$PIDBirthOrder_"</BirthOrder>") }
+
+ #; PID-26 : Citizenship
+ set (%occ,citizenship)="" for {
+	set %occ=$$$PIDCitizenship(%occ) quit:%occ=""
+	if ($$$PIDCitizenshipIdentifier(%occ)'="")||($$$PIDCitizenshipText(%occ)'="") {
+		do ..write(cr_"<Citizenship>")
+		do ..write(cr_"<SDACodingStandard>"_$$$PIDCitizenshipNameofCodingSystem(%occ)_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$PIDCitizenshipIdentifier(%occ)_"</Code>")
+		do ..write(cr_"<Description>"_$$$PIDCitizenshipText(%occ)_"</Description>")
+		do ..write(cr_"</Citizenship>")
+		set citizenship=1
+		quit  // only one
+	}
+ }
+ 
+  #; PID -27 : Military/Veteran Flag is handled in Patient Extension 
+
+ #; PID-28 : Nationality - only used if PID-26 is empty
+ if (citizenship'=1)&&
+	(($$$PIDNationalityIdentifier'="")||($$$PIDNationalityText'="")) {
+	do ..write(cr_"<Citizenship>")
+	do ..write(cr_"<SDACodingStandard>"_$$$PIDNationalityNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$PIDNationalityIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$PIDNationalityText_"</Description>")
+	do ..write(cr_"</Citizenship>")
+ }
+
+ #; PID-29 : PatientDeathDateandTime
+ do ..write(cr_"<DeathTime>"_..xmltimestamp($$$PIDPatientDeathDateandTimeTime)_"</DeathTime>")
+
+ #; PID-30 : PatientDeathIndicator
+ set isDead = $CASE($$$PIDPatientDeathIndicator, "Y":1, "N":0, $C(34,34):$C(34,34), :"")
+ if isDead'="" {
+ 	do ..write(cr_"<IsDead>"_isDead_"</IsDead>")
+ }
+
+ #; PID-33 : LastUpdateDateTime -> EnteredOn in SuperClass
+ do ..write(cr_"<EnteredOn>"_..xmltimestamp($$$PIDLastUpdateDateTimeTime)_"</EnteredOn>")
+
+ #; PID-34 : LastUpdateFacility -> EnteredAt in SuperClass
+ do ..write(cr_"<EnteredAt>")
+ if $$$PIDLastUpdateFacilityNamespaceID'="" {
+	do ..write(cr_"<Code>"_$$$PIDLastUpdateFacilityNamespaceID_"</Code>")
+ } else {
+	do ..write(cr_"<Code>"_$$$MSHSendingFacilityNamespaceID_"</Code>")
+ }
+ do ..write(cr_"</EnteredAt>")
+
+ #; J2 PJH Additional ","
+ #; EVN-5 : OperatorID  -> EnteredBy in SuperClass
+ if $$$EVN'="" {
+	set %occ="" for {
+		set %occ=$$$EVNOperator(%occ) quit:%occ=""
+		do ..By("<EnteredBy>",,"User",
+			$$$EVNOperatorIDAssigningAuthority(%occ),
+			$$$EVNOperatorIDIDNumber(%occ),
+			$$$EVNOperatorIDFamilyNameSurname(%occ),
+			$$$EVNOperatorIDGivenName(%occ))
+		quit  // only one
+	}
+ }
+ 
+ #; Military and Veteran Flag and SOGI Data in Patient Extension 
+ if $$$Next("OBX") {do ..PatientExtension()} 
+ 
+ #; Add sending system
+ do ..SendingSystemWithHealthixConsent()
+ 
+ #; Reset the segment back to PID so we don't add NTE comments to the HS.SDA3.Patient::Comments
+ set s = ^||HS.Data("PID")
+}
+
+ClassMethod PR1()
+{
+ $$$Find("PR1")
+ #if $$$HSDebug
+	do ##class(HS.Util.HSDebug).Debug("PR1","HS.Gateway.HL7.HL7ToSDA","txt",s)
+ #endif
+
+ do ..start("PR1",cr_"<Procedures>")
+
+ do ..write(cr_"<Procedure>")
+ do ..WriteEncounterNumber(encNum)
+
+ #; PR1-3 : ProcedureCode
+ if ($$$PR1ProcedureCodeIdentifier'="")||($$$PR1ProcedureCodeText'="") {
+	do ..write(cr_"<Procedure>")
+	do ..write(cr_"<SDACodingStandard>"_$$$PR1ProcedureCodeNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$PR1ProcedureCodeIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$PR1ProcedureCodeText_"</Description>")
+	if ($$$PR1ProcedureCodeAltIdentifier'="")||($$$PR1ProcedureCodeAltText'="") {
+		do ..write(cr_"<PriorCodes>")
+		do ..write(cr_"<PriorCode>")
+		do ..write(cr_"<CodeSystem>"_$$$PR1ProcedureCodeAltNameofCodingSystem_"</CodeSystem>")
+		do ..write(cr_"<Code>"_$$$PR1ProcedureCodeAltIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$PR1ProcedureCodeAltText_"</Description>")
+		do ..write(cr_"<Type>A</Type>")
+		do ..write(cr_"</PriorCode>")
+		do ..write(cr_"</PriorCodes>")
+	}
+	if ($$$PR1ProcedureCodeOriginalText'="") {
+		do ..write(cr_"<OriginalText>"_$$$PR1ProcedureCodeOriginalText_"</OriginalText>")
+	}
+	do ..write(cr_"</Procedure>")
+ }
+
+ #; PR1-4 : ProcedureDescription
+ elseif ($$$PR1ProcedureDescription'="") {
+	do ..write(cr_"<Procedure>")
+	do ..write(cr_"<Code>"_$$$PR1ProcedureDescription_"</Code>")
+	do ..write(cr_"</Procedure>")
+ }
+
+ #; PR1-5 : ProcedureDateTime
+ do ..write(cr_"<ProcedureTime>"_..xmltimestamp($$$PR1ProcedureDateTimeTime)_"</ProcedureTime>")
+
+ #; PR1-11 : Surgeon
+ set %occ="" for {
+	set %occ=$$$PR1Surgeon(%occ) quit:%occ=""
+	do ..By("<Clinician>",,
+		"CareProvider",
+		$$$PR1SurgeonAssigningAuthority(%occ),
+		$$$PR1SurgeonIDNumber(%occ),
+		$$$PR1SurgeonFamilyNameSurname(%occ),
+		$$$PR1SurgeonGivenName(%occ),
+		$$$PR1SurgeonMiddleName(%occ),
+		$$$PR1SurgeonNamePrefix(%occ),
+		$$$PR1SurgeonNameSuffix(%occ),
+		$$$PR1SurgeonProfessionalSuffix(%occ))
+	quit  // only one
+ }
+
+ #; PR1-19 : ProcedureIdentifier
+ do ..write(cr_"<ExternalId>"_$$$PR1ProcedureIdentifierEntityIdentifier_"</ExternalId>")
+ 
+ #; PR1-20 : ProcedureActionCode
+ if ($$$PR1ProcedureActionCode'="") {
+	 do ..write(cr_"<ActionCode>"_$$$PR1ProcedureActionCode_"</ActionCode>")
+ }
+ 
+
+ #; MSH-4 : SendingFacility -> EnteredAt in SuperClass 
+ do ..write(cr_"<EnteredAt>")
+ do ..write(cr_"<Code>"_$$$MSHSendingFacilityNamespaceID_"</Code>")
+ do ..write(cr_"</EnteredAt>")
+
+ #; Add sending system
+ do ..SendingSystem()
+ do ..write(cr_"</Procedure>")
+}
+
+ClassMethod SCH()
+{
+	$$$Find("SCH")
+ 	do ..write(cr_"<Appointments>")
+ 	do ..write(cr_"<Appointment>")
+ 	if ($D(encNum)) { do ..WriteEncounterNumber(encNum) }
+ 	#; SCH-1 : PlacerAppointmentID
+ 	#; SCH-2 : FillerAppointmentID
+ 	#; SCH-3 : OccurrenceNumber
+ 	set placerApptId = $$$SCHPlacerAppointmentID
+ 	set fillerApptId = $$$SCHFillerAppointmentID
+ 	set occNum = $$$SCHOccurrenceNumber
+ 	if (occNum '= "") {
+	 	if (placerApptId '= "") { set placerApptId = placerApptId_":"_occNum }
+	 	if (fillerApptId '= "") { set fillerApptId = fillerApptId_":"_occNum }
+ 	}
+ 	do ..write(cr_"<PlacerApptId>"_placerApptId_"</PlacerApptId>")
+ 	do ..write(cr_"<FillerApptId>"_fillerApptId_"</FillerApptId>")
+ 	// If a delete, just set the ActionCode and quit here.
+ 	if (msgType = "SIU_S17") {
+	 	do ..write(cr_"<ActionCode>D</ActionCode>")
+	 	do ..write(cr_"</Appointment>")
+	 	do ..write(cr_"</Appointments>")
+	 	#; RGS segment is required but not used
+		$$$Find("RGS")
+	 	quit
+ 	}
+ 	// SIU_S15 and 16 set the Status
+ 	set status = $CASE(msgType, "SIU_S15":"CANCELLED", "SIU_S16":"DC", :"")
+ 	if (status'="") { do ..write(cr_"<Status>"_status_"</Status>") }
+ 	// SIU_S26 sets NoShow
+ 	if (msgType = "SIU_S26") { do ..write(cr_"<NoShow>1</NoShow>") }
+ 	
+ 	
+ 	#; SCH-7 : AppointmentReason
+ 	if ($$$SCHAppointmentReasonIdentifier'="")||($$$SCHAppointmentReasonText'="") {
+	 	do ..write(cr_"<Type>")
+	 	do ..write(cr_"<SDACodingStandard>"_$$$SCHAppointmentReasonNameofCodingSystem_"</SDACodingStandard>")
+ 		do ..write(cr_"<Code>"_$$$SCHAppointmentReasonIdentifier_"</Code>")
+ 		do ..write(cr_"<Description>"_$$$SCHAppointmentReasonText_"</Description>")
+ 		do ..write(cr_"</Type>")
+ 	}
+ 	
+ 	#; SCH-9 : AppointmentDuration
+ 	#; SCH-10 : AppointmentDurationUnits
+ 	#; SCH-11 : AppointmentTimingQuantity
+ 	#; TQ1-6 : ServiceDuration
+ 	#; TQ1-7 : StartDateTime
+ 	#; TQ1-8 : EndDateTime
+ 	// A TQ1 is supposed to be used for the start and end time, the SCH fields are only supported for backwards compatibility.
+ 	// Check first for a TQ1 following the SCH, and if none, look at the SCH fields.
+ 	// In either case, if there is a start time and duration but no end time, end time is calculated, but only if the units
+ 	// of the duration is one of "M", "MINUTES", "H", or "HOURS", case-insensitive
+ 	if ($$$IsFollowing("TQ1")) {
+	 	$$$GetFollowing("TQ1")
+	 	set durationQuantity = $$$TQ1ServiceDurationQuantity
+	 	set durationUnits = $system.Util.Collation($$$TQ1ServiceDurationUnitsIdentifier,6)  // ALPHAUP
+	 	set fromTime = $$$TQ1StartdatetimeTime
+	 	set toTime = $$$TQ1EnddatetimeTime
+	 	// Switch context back to SCH segment
+	 	set s = s - 1
+ 	}
+ 	else {
+	 	set durationQuantity = $$$SCHAppointmentDuration
+	 	set durationUnits = $system.Util.Collation($$$SCHAppointmentDurationUnitsIdentifier,6)  // ALPHAUP
+	 	set (fromTime,toTime)=""
+		set %occ="" for {
+			set %occ = $$$SCHTimingQuantity(%occ) quit:%occ=""
+			set fromTime = $$$SCHTimingQuantityStartDateTime(%occ)
+			set toTime = $$$SCHTimingQuantityEndDateTime(%occ)
+			quit  // only one
+		}
+ 	}
+ 	if ((fromTime'="")&&(toTime="")&&($IsValidNum(durationQuantity))&&(",M,MINUTES,H,HOURS,"[(","_durationUnits_","))) {
+	 	// Calculate ToTime from FromTime and Duration
+	 	// Convert duration to seconds
+	 	if ($E(durationUnits) = "M") { set durationQuantity = durationQuantity * 60 }
+	 	else { set durationQuantity = durationQuantity * 3600 }
+	 	// Convert FromTime to horolog format
+	 	set dateTimeH=..HL7ToHorolog(fromTime), dateH=$P(dateTimeH,",",1), timeH=$P(dateTimeH,",",2)
+	 	set timeH = timeH + durationQuantity
+	 	// Check to see if the duration incremented the date. Not likely, but just in case.
+	 	set secondsPerDay = 86400
+	 	if (timeH >= secondsPerDay) {
+		 	set dateH = dateH + timeH\secondsPerDay // Will also take care of cases where date is incremented by >1
+		 	set timeH = timeH # secondsPerDay
+	 	}
+	 	// and finally convert to xml format
+	 	set fromTime = $TR($ZDT(dateTimeH, 3), " ", "T")_"Z"
+	 	set toTime = $TR($ZDT(dateH_","_timeH, 3), " ", "T")_"Z"
+	 	do ..write(cr_"<FromTime>"_fromTime_"</FromTime>")
+	 	do ..write(cr_"<ToTime>"_toTime_"</ToTime>")
+ 	}
+ 	else {
+		do ..write(cr_"<FromTime>"_..xmltimestamp(fromTime)_"</FromTime>")
+	 	do ..write(cr_"<ToTime>"_..xmltimestamp(toTime)_"</ToTime>")
+ 	}
+ 	
+ 	#; SCH-20 : EnteredByPerson
+ 	set %occ="" for {
+		set %occ=$$$SCHEnteredByPerson(%occ) quit:%occ=""
+		do ..By("<EnteredBy>",,"User",
+			$$$SCHEnteredByPersonAssigningAuthority(%occ),
+			$$$SCHEnteredByPersonIDNumber(%occ),
+			$$$SCHEnteredByPersonFamilyNameSurname(%occ),
+			$$$SCHEnteredByPersonGivenName(%occ))
+		quit  // only one
+	}
+	
+	#; SCH-22 : EnteredAtLocation
+	if ($$$SCHEnteredAtLocation '= "") { set enteredAt = $$$SCHEnteredAtLocation }
+	else { set enteredAt = $$$MSHSendingFacilityNamespaceID }
+	do ..write(cr_"<EnteredAt>")
+	do ..write(cr_"<Code>"_enteredAt_"</Code>")
+	do ..write(cr_"</EnteredAt>")
+	
+	#; SCH-25 : Status
+	do ..write(cr_"<Status>"_$$$xml($g(^||HS.Data(s,25,1)))_"</Status>")
+	
+	#; SCH-26 : PlacerOrderNumber
+	do ..write("<PlacerOrderId>"_$$$SCHPlacerOrderNumber_"</PlacerOrderId>")
+	#; SCH-27 : FillerOrderNumber
+	do ..write("<FillerOrderId>"_$$$SCHFillerOrderNumber_"</FillerOrderId>")
+	
+	#; NTE segment (repeating)
+	#; NTEs will follow the TQ1, if present, so first find them, then go back 1 segment because
+	#; writecdata will advance the context one segment
+	if $$$Next("NTE") {
+		set s = $$$Next("NTE")
+		// Make sure we are following either the SCH or TQ1
+		if ((^||HS.Data(s-1)="SCH")||(^||HS.Data(s-1)="TQ1")) { set s=s-1 do ..writecdata("Notes","NTE",3) }
+	}
+	
+	#; RGS segment is required but not used
+	$$$Find("RGS")	
+	if $$$Next("AIS") do ..AIS()
+	if $$$Next("AIP") do ..AIP()
+	if $$$Next("AIL") do ..AIL()
+	
+	#; HEP-514 - Added VirtualFlag
+	if $g(^||HS.Data("SCH")){
+		Set tVirtualFlag=$$$xml($g(^||HS.Data(^||HS.Data("SCH"),8,1)))
+		if tVirtualFlag'=""{
+			do ..write(cr_"<Extension>")
+			do ..write(cr_"<VirtualFlag>"_tVirtualFlag_"</VirtualFlag>")	
+			do ..write(cr_"</Extension>")
+		}
+	}
+	
+	#; Add sending system
+	do ..SendingSystem()
+	do ..write(cr_"</Appointment>")
+	do ..write(cr_"</Appointments>")
+}
+
+ClassMethod TXA()
+{
+ 
+	$$$Find("TXA")
+	#if $$$HSDebug
+		do ##class(HS.Util.HSDebug).Debug("TXA","HS.Gateway.HL7.HL7ToSDA","txt",s)
+	#endif
+
+	do ..start("TXA",cr_"<Documents>")
+	do ..write(cr_"<Document>")
+	do ..WriteEncounterNumber(encNum)
+
+	#; TXA-1 : SetIDTXA ("" means inactivate all, """" means delete all)
+	if $$$TXASetIDTXA="""""" {
+		do ..write(cr_"<ActionCode>I</ActionCode></Document>") quit
+ 	}
+	elseif $$$TXASetIDTXA="""""""""" {
+		do ..write(cr_"<ActionCode>C</ActionCode></Document>") quit
+ 	}
+
+	#; MDM^T11 is Delete Document
+	if msgType="MDM_T11" do ..write(cr_"<ActionCode>D</ActionCode>")
+
+	#; TXA-2 : DocumentType
+	#; For "DS", default Description to "DischargeSummary" (JLD190)
+	if $$$TXADocumentType = "DS" {
+		do ..write(cr_"<DocumentType>")
+		do ..write(cr_"<Code>DS</Code>")
+		do ..write(cr_"<Description>DischargeSummary</Description>")
+		do ..write(cr_"</DocumentType>")
+	}
+	elseif $$$TXADocumentType'="" {
+		do ..write(cr_"<DocumentType>")
+		do ..write(cr_"<Code>"_$$$TXADocumentType_"</Code>")
+		do ..write(cr_"</DocumentType>")
+	}
+
+	#; TXA-4 : ActivityDateTime
+	do ..write(cr_"<DocumentTime>"_..xmltimestamp($$$TXAActivityDateTimeTime)_"</DocumentTime>")
+	
+	#; TXA-5 : PrimaryActivityProviderCodeName
+	set %occ="" for {
+		set %occ=$$$TXAPrimaryActivityProviderCodeName(%occ) quit:%occ=""
+		do ..By("<Clinician>",,
+			"CareProvider",
+			$$$TXAPrimaryActivityProviderCodeNameAssigningAuthority(%occ),
+			$$$TXAPrimaryActivityProviderCodeNameIDNumber(%occ),
+ 			$$$TXAPrimaryActivityProviderCodeNameFamilyNameSurname(%occ),
+			$$$TXAPrimaryActivityProviderCodeNameGivenName(%occ),
+			$$$TXAPrimaryActivityProviderCodeNameMiddleName(%occ),
+			$$$TXAPrimaryActivityProviderCodeNamePrefix(%occ),
+			$$$TXAPrimaryActivityProviderCodeNameSuffix(%occ),
+			$$$TXAPrimaryActivityProviderCodeProfessionalSuffix(%occ))
+ 		quit  // only one
+	}
+
+	#; TXA-7 : TranscriptionDateTime
+	do ..write(cr_"<TranscriptionTime>"_..xmltimestamp($$$TXATranscriptionDateTimeTime)_"</TranscriptionTime>")
+	
+	#; TXA-9 : OriginatorCodeName
+	set %occ="" for {
+		set %occ=$$$TXAOriginatorCodeName(%occ) quit:%occ=""
+		do ..By("<EnteredBy>",,"User",
+			$$$TXAOriginatorCodeNameAssigningAuthority(%occ),
+			$$$TXAOriginatorCodeNameIDNumber(%occ),
+			$$$TXAOriginatorCodeNameFamilyNameSurname(%occ),
+			$$$TXAOriginatorCodeNameGivenName(%occ))
+		quit  // only one
+	}
+	
+	#; TXA-12 : UniqueDocumentNumber
+	do ..write(cr_"<DocumentNumber>"_$$$TXAUniqueDocumentNumber_"</DocumentNumber>")
+	
+	#; TXA-16 : UniqueDocumentFileName
+	do ..write(cr_"<DocumentName>"_$$$TXAUniqueDocumentFileName_"</DocumentName>")
+	
+	#; TXA-19 : DocumentAvailabilityStatus
+	if $$$TXADocumentAvailabilityStatus'="" {
+		do ..write(cr_"<Status><Code>"_$$$TXADocumentAvailabilityStatus_"</Code></Status>")}
+	
+	#; TXA-22 : AuthenticationPersonTimeStamp
+	do ..write(cr_"<AuthorizationTime>"_..xmltimestamp($$$TXAAuthenticationPersonTimeStampDateTimeActionPerformed)_"</AuthorizationTime>")
+	
+	#; MSH-4 : SendingFacility -> EnteredAt in SuperClass 
+	do ..write(cr_"<EnteredAt>")
+	do ..write(cr_"<Code>"_$$$MSHSendingFacilityNamespaceID_"</Code>")
+	do ..write(cr_"</EnteredAt>")
+
+	#; OBX
+	if $$$IsFollowing("OBX") {do ..OBX("mdm")}
+	
+	#; Add Sending System
+	do ..SendingSystem()
+	
+	do ..write(cr_"</Document>")
+}
+
+ClassMethod VerifyHealthixConsent() As %String
+{
+	Set tHL7Consent=$g(^||HS.Data(^||HS.Data("MSH"),21,1))
+	Set tHL7EffectiveDateTime=..xmltimestamp($g(^||HS.Data(^||HS.Data("MSH"),21,2)))		
+	
+	Set tConsentValues=tHL7Consent_"|"_tHL7EffectiveDateTime
+		
+	// Get MRN and AA from PID:2
+	Set tMrn=$$$PIDPatientIDIDNumber
+	Set tAA=$$$PIDPatientIDAssigningAuthorityNamespaceID	
+	if tAA="" set tAA=$$$MSHSendingFacilityNamespaceID
+	
+	// Get MRN and AA from PID:3
+	set %occ="" 
+	for 
+	{
+		set %occ=$$$PIDPatientIdentifierList(%occ) quit:%occ=""	 	
+		set numbertype=..idtype($$$PIDPatientIdentifierListIdentifierTypeCode(%occ))
+		if numbertype="MRN",tMrn="" 
+		{
+			set tMrn=$$$PIDPatientIdentifierListIDNumber(%occ)	
+			set tAA=$$$PIDPatientIdentifierListAssigningAuthorityNamespaceID(%occ)
+			if tAA="" set tAA=$$$MSHSendingFacilityNamespaceID			
+		}
+	}
+	
+	// Get Consent info stored in SDA
+	Set tSdaConsentInfo=##Class(CUSTOM.CORE.Util.StreamletDataHelper).GetHealthixConsentByMrn(tMrn,tAA)	
+	If tSdaConsentInfo'=""
+	{	
+		Set tListValue=$LISTFROMSTRING(tSdaConsentInfo,"|")
+		
+		Set tSdaConsent=$LISTGET(tListValue,1)
+		Set tSdaEffectiveDateTime=$LISTGET(tListValue,2)	
+		Set tVal=##class(%Library.UTC).Compare($ZSTRIP(tSdaEffectiveDateTime,">","Z"),$ZSTRIP(tHL7EffectiveDateTime,">","Z"))
+		If tVal>0
+		{
+			Set tConsentValues=tSdaConsent_"|"_tSdaEffectiveDateTime
+		}
+	}
+	Quit tConsentValues
+}
+
+ClassMethod IN1()
+{
+  $$$Find("IN1")
+ #if $$$HSDebug
+	do ##class(HS.Util.HSDebug).Debug("IN1","HS.Gateway.HL7.HL7ToSDA3","txt",s)
+ #endif
+
+ #; IN1-3.1 : InsuranceCompany or #; IN1-4.1 : InsuranceCompanyName are required
+ if $$$IN1InsuranceCompanyID="",$$$IN1InsuranceCompanyName="" quit
+
+ do ..start("IN1",cr_"<HealthFunds>")
+
+ do ..write(cr_"<HealthFund>")
+	
+ #; IN1-2 : InsurancePlanID
+ #; Plan (if present)  [HL7: required]
+ if ($$$IN1InsurancePlanIDIdentifier'="")||($$$IN1InsurancePlanIDText'="") {
+	do ..write(cr_"<HealthFundPlan>")
+	do ..write(cr_"<SDACodingStandard>"_$$$IN1InsurancePlanIDNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$IN1InsurancePlanIDIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$IN1InsurancePlanIDText_"</Description>")
+	do ..write(cr_"</HealthFundPlan>")
+ }
+ #; IN1-3 : InsuranceCompany
+ #; IN1-4 : InsuranceCompanyName
+ #; Fund
+ do ..write(cr_"<HealthFund>")
+ do ..write(cr_"<SDACodingStandard>"_$$$IN1InsuranceCompanyAssigningAuthority_"</SDACodingStandard>")
+ do ..write(cr_"<Code>"_$$$IN1InsuranceCompanyID_"</Code>")
+ do ..write(cr_"<Description>"_$$$IN1InsuranceCompanyName_"</Description>")
+ #; IN1-5 : InsuranceCompanyAddress
+ do ..write(cr_"<Address>")	 
+ do ..write(cr_"<Street>")
+ do ..write($$$IN1InsuranceCompanyAddressStreetAddressStreetorMailingAddress)
+ if $$$IN1InsuranceCompanyAddressOtherDesignation'="" {
+	do ..write("; "_$$$IN1InsuranceCompanyAddressOtherDesignation)}
+ do ..write("</Street>")
+ if $$$IN1InsuranceCompanyAddressCity'="" {
+	do ..write(cr_"<City>")
+	do ..write(cr_"<Code>"_$$$IN1InsuranceCompanyAddressCity_"</Code>")
+	do ..write(cr_"</City>")
+ }
+ if $$$IN1InsuranceCompanyAddressStateorProvince'="" {
+	do ..write(cr_"<State>")
+	do ..write(cr_"<Code>"_$$$IN1InsuranceCompanyAddressStateorProvince_"</Code>")
+	do ..write(cr_"</State>")
+ }
+ if $$$IN1InsuranceCompanyAddressZiporPostalCode'="" {
+	do ..write(cr_"<Zip>")
+	do ..write(cr_"<Code>"_$$$IN1InsuranceCompanyAddressZiporPostalCode_"</Code>")
+	do ..write(cr_"</Zip>")
+ }
+ if $$$IN1InsuranceCompanyAddressCountry'="" {
+	do ..write(cr_"<Country>")
+	do ..write(cr_"<Code>"_$$$IN1InsuranceCompanyAddressCountry_"</Code>")
+	do ..write(cr_"</Country>")
+ }
+ if $$$IN1InsuranceCompanyAddressCountyParishCode'="" {
+	do ..write(cr_"<County>")
+	do ..write(cr_"<Code>"_$$$IN1InsuranceCompanyAddressCountyParishCode_"</Code>")
+	do ..write(cr_"</County>")
+ }
+ do ..write(cr_"<FromTime>"_..xmltimestamp($$$IN1InsuranceCompanyAddressEffectiveDateTime)_"</FromTime>")
+ do ..write(cr_"<ToTime>"_..xmltimestamp($$$IN1InsuranceCompanyAddressExpirationDateTime)_"</ToTime>")
+ do ..write(cr_"</Address>")
+ #; IN1-6 : InsuranceCoContactPerson
+ do ..write(cr_"<ContactPerson>")	 
+ do ..write(cr_"<GivenName>"_$$$IN1InsuranceCoContactPersonGivenName_"</GivenName>")
+ do ..write(cr_"<FamilyName>"_$$$IN1InsuranceCoContactPersonFamilyNameSurname_"</FamilyName>")
+ do ..write(cr_"<FamilyNamePrefix>"_$$$IN1InsuranceCoContactPersonFamilyNameOwnSurnamePrefix_"</FamilyNamePrefix>")
+ do ..write(cr_"<MiddleName>"_$$$IN1InsuranceCoContactPersonSecondandFurtherGivenNamesor_"</MiddleName>")
+ do ..write(cr_"<NamePrefix>"_$$$IN1InsuranceCoContactPersonPrefix_"</NamePrefix>")
+ do ..write(cr_"<NameSuffix>"_$$$IN1InsuranceCoContactPersonSuffix_"</NameSuffix>")
+ do ..write(cr_"<ProfessionalSuffix>"_$$$IN1InsuranceCoContactPersonProfessionalSuffix_"</ProfessionalSuffix>")
+ do ..write(cr_"</ContactPerson>")	 
+ #; IN1-7 : InsuranceCoPhoneNumber
+ do ..PhonesAndEmail(s,7,.workphone,.workmobile,.workemail)
+ do ..write(cr_"<ContactInfo>")
+ do ..write(cr_"<WorkPhoneNumber>"_..xml($p(workphone,"^",1))_"</WorkPhoneNumber>")
+ do ..write(cr_"<MobilePhoneNumber>"_..xml($p(workmobile,"^",1))_"</MobilePhoneNumber>")
+ do ..write(cr_"<EmailAddress>"_..xml($p(workemail,"^",1))_"</EmailAddress>")
+ do ..write(cr_"</ContactInfo>")
+
+ do ..write(cr_"</HealthFund>")
+
+ #; IN1-8 : GroupNumber
+ do ..write(cr_"<GroupNumber>"_$$$IN1GroupNumber_"</GroupNumber>")
+
+ #; IN1-9 : GroupName
+ do ..write(cr_"<GroupName>"_$$$IN1GroupNameOrganizationName_"</GroupName>")
+
+ #; IN1-12 : PlanEffectiveDate  (free text, we assume it is HL7Date)
+ do ..write(cr_"<FromTime>"_..xmltimestamp($$$IN1PlanEffectiveDate)_"</FromTime>")
+
+ #; IN1-13 : PlanExpirationDate
+ do ..write(cr_"<ToTime>"_..xmltimestamp($$$IN1PlanExpirationDate)_"</ToTime>")
+
+ #; IN1-15 : PlanType
+ do ..write(cr_"<PlanType>"_$$$IN1PlanType_"</PlanType>")
+
+ #; IN1-16 : NameOfInsured
+ do ..write(cr_"<InsuredName>")	 
+ do ..write(cr_"<GivenName>"_$$$IN1NameOfInsuredGivenName_"</GivenName>")
+ do ..write(cr_"<FamilyName>"_$$$IN1NameOfInsuredFamilyNameSurname_"</FamilyName>")
+ do ..write(cr_"<FamilyNamePrefix>"_$$$IN1NameOfInsuredFamilyNameOwnSurnamePrefix_"</FamilyNamePrefix>")
+ do ..write(cr_"<MiddleName>"_$$$IN1NameOfInsuredSecondandFurtherGivenNamesor_"</MiddleName>")
+ do ..write(cr_"<NamePrefix>"_$$$IN1NameOfInsuredPrefix_"</NamePrefix>")
+ do ..write(cr_"<NameSuffix>"_$$$IN1NameOfInsuredSuffix_"</NameSuffix>")
+ do ..write(cr_"<ProfessionalSuffix>"_$$$IN1NameOfInsuredProfessionalSuffix_"</ProfessionalSuffix>")
+ do ..write(cr_"</InsuredName>")	 
+
+ #; IN1-17 : InsuredsRelationshipToPatien
+  if ($$$IN1InsuredsRelationshipToPatienIdentifier'="")||($$$IN1InsuredsRelationshipToPatienText'="") {
+	do ..write(cr_"<InsuredRelationship>")
+	do ..write(cr_"<SDACodingStandard>"_$$$IN1InsuredsRelationshipToPatienNameofCodingSystem_"</SDACodingStandard>")
+	do ..write(cr_"<Code>"_$$$IN1InsuredsRelationshipToPatienIdentifier_"</Code>")
+	do ..write(cr_"<Description>"_$$$IN1InsuredsRelationshipToPatienText_"</Description>")
+ 	do ..write(cr_"</InsuredRelationship>")
+ }
+
+ #; IN1-19 : InsuredsAddress
+ do ..write(cr_"<InsuredAddress>")	 
+ do ..write(cr_"<Street>")
+ do ..write($$$IN1InsuredsAddressStreetAddressStreetorMailingAddress)
+ if $$$IN1InsuredsAddressOtherDesignation'="" {
+ 	do ..write("; "_$$$IN1InsuredsAddressOtherDesignation)}
+ do ..write("</Street>")
+ if $$$IN1InsuredsAddressCity'="" {
+	do ..write(cr_"<City>")
+	do ..write(cr_"<Code>"_$$$IN1InsuredsAddressCity_"</Code>")
+	do ..write(cr_"</City>")
+ }
+ if $$$IN1InsuredsAddressStateorProvince'="" {
+	do ..write(cr_"<State>")
+	do ..write(cr_"<Code>"_$$$IN1InsuredsAddressStateorProvince_"</Code>")
+	do ..write(cr_"</State>")
+ }
+ if $$$IN1InsuredsAddressZiporPostalCode'="" {
+	do ..write(cr_"<Zip>")
+	do ..write(cr_"<Code>"_$$$IN1InsuredsAddressZiporPostalCode_"</Code>")
+	do ..write(cr_"</Zip>")
+ }
+ if $$$IN1InsuredsAddressCountry'="" {
+	do ..write(cr_"<Country>")
+	do ..write(cr_"<Code>"_$$$IN1InsuredsAddressCountry_"</Code>")
+	do ..write(cr_"</Country>")
+ }
+ if $$$IN1InsuredsAddressCountyParishCode'="" {
+	do ..write(cr_"<County>")
+	do ..write(cr_"<Code>"_$$$IN1InsuredsAddressCountyParishCode_"</Code>")
+	do ..write(cr_"</County>")
+ }
+ do ..write(cr_"<FromTime>"_..xmltimestamp($$$IN1InsuredsAddressEffectiveDateTime)_"</FromTime>")
+ do ..write(cr_"<ToTime>"_..xmltimestamp($$$IN1InsuredsAddressExpirationDateTime)_"</ToTime>")
+ do ..write(cr_"</InsuredAddress>")
+ 
+ #; IN1-22 : Coord of Ben. Priority
+ do ..write(cr_"<Priority>"_$$$IN1CoordofBenPriority_"</Priority>")
+
+ #; IN1-36 : PolicyNumber
+ do ..write(cr_"<MembershipNumber>"_$$$IN1PolicyNumber_"</MembershipNumber>")
+
+ 
+ #; ID-2131 IN1-45 : Insurance Verification Status mapping
+ Set tVerification=$g(^||HS.Data(^||HS.Data("IN1"),45))
+ if (tVerification'="") {
+ 	do ..write(cr_"<Extension>")
+ 	do ..write(cr_"<VerificationStatus>"_tVerification_"</VerificationStatus>")	
+ 	do ..write(cr_"</Extension>")
+} 
+ do ..write(cr_"</HealthFund>")
+}
+
+ClassMethod RXE()
+{
+	$$$GetFollowing("RXE")
+	
+	#; RXE-1 : QuantityTiming (see also ORC-7, TQ1-2, -7, -8, -9, -10, -11)
+	do ..write(cr_"<OrderQuantity>"_$$$RXEQuantityTimingQuantityQuantity_"</OrderQuantity>")
+	if $$$RXEQuantityTimingDuration'="" {
+		do ..write(cr_"<Duration>")
+		do ..write(cr_"<Code>"_$$$RXEQuantityTimingDuration_"</Code>")
+		do ..write(cr_"</Duration>")
+	}
+	do ..write(cr_"<FromTime>"_..xmltimestamp($$$RXEQuantityTimingStartDateTimeTime)_"</FromTime>")
+	do ..write(cr_"<ToTime>"_..xmltimestamp($$$RXEQuantityTimingEndDateTimeTime)_"</ToTime>")
+	if $$$RXEQuantityTimingPriority'="" {
+		do ..write(cr_"<Priority>")
+		do ..write(cr_"<Code>"_$$$RXEQuantityTimingPriority_"</Code>")
+		do ..write(cr_"</Priority>")
+	}
+	do ..write(cr_"<Condition>"_$$$RXEQuantityTimingCondition_"</Condition>")
+	do ..write(cr_"<TextInstruction>"_$$$RXEQuantityTimingText_"</TextInstruction>")
+	
+	#; RXE-2 : GiveCode
+	if ($$$RXEGiveCodeIdentifier'="")||($$$RXEGiveCodeText'="") {
+		do ..write(cr_"<DrugProduct>")
+		do ..write(cr_"<SDACodingStandard>"_$$$RXEGiveCodeNameofCodingSystem_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$RXEGiveCodeIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$RXEGiveCodeText_"</Description>")
+		if ($$$RXEGiveCodeAltIdentifier'="")||($$$RXEGiveCodeAltText'="") {
+			do ..write(cr_"<PriorCodes>")
+			do ..write(cr_"<PriorCode>")
+			do ..write(cr_"<CodeSystem>"_$$$RXEGiveCodeAltNameofCodingSystem_"</CodeSystem>")
+			do ..write(cr_"<Code>"_$$$RXEGiveCodeAltIdentifier_"</Code>")
+			do ..write(cr_"<Description>"_$$$RXEGiveCodeAltText_"</Description>")
+			do ..write(cr_"<Type>A</Type>")
+			do ..write(cr_"</PriorCode>")
+			do ..write(cr_"</PriorCodes>")
+		}
+		if ($$$RXEGiveCodeOriginalText'="") {
+			do ..write(cr_"<OriginalText>"_$$$RXEGiveCodeOriginalText_"</OriginalText>")
+		}
+		do ..write(cr_"</DrugProduct>")
+	}
+	
+	#; RXE-3 : GiveAmountMinimum
+ 	do ..write(cr_"<DoseQuantity>"_$$$RXEGiveAmountMinimum_"</DoseQuantity>")
+
+ 	#; RXE-4 : GiveAmountMaximum
+ 	do ..write(cr_"<MaxDoseQuantity>"_$$$RXEGiveAmountMaximum_"</MaxDoseQuantity>")
+ 	
+ 	#; RXE-5 : GiveUnits
+ 	if ($$$RXEGiveUnitsIdentifier'="")||($$$RXEGiveUnitsText'="") {
+		do ..write(cr_"<DoseUoM>")
+		do ..write(cr_"<SDACodingStandard>"_$$$RXEGiveUnitsNameofCodingSyatem_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$RXEGiveUnitsIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$RXEGiveUnitsText_"</Description>")
+		do ..write(cr_"</DoseUoM>")
+ 	}
+ 	
+ 	#; RXE-6 : GiveDosageForm
+ 	if ($$$RXEGiveDosageFormIdentifier'="")||($$$RXEGiveDosageFormText'="") {
+		do ..write(cr_"<DosageForm>")
+		do ..write(cr_"<SDACodingStandard>"_$$$RXEGiveDosageFormNameofCodingSystem_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$RXEGiveDosageFormIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$RXEGiveDosageFormText_"</Description>")
+		do ..write(cr_"</DosageForm>")
+	}
+	
+	#; RXE-7 : ProvidersAdministrationInstr
+ 	set %occ="" for {
+		set %occ=$$$RXEProvidersAdministrationInstr(%occ) quit:%occ=""
+		do ..write(cr_"<Route>")
+		do ..write(cr_"<SDACodingStandard>"_$$$RXEProvidersAdministrationInstrNameofCodingSystem(%occ)_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$RXEProvidersAdministrationInstrIdentifier(%occ)_"</Code>")
+		do ..write(cr_"<Description>"_$$$RXEProvidersAdministrationInstrText(%occ)_"</Description>")
+		do ..write(cr_"</Route>")
+		quit // only one
+	}
+	
+	#; RXE-12 : NumberOfRefills
+ 	do ..write(cr_"<NumberOfRefills>"_$$$RXENumberOfRefills_"</NumberOfRefills>")
+ 	
+ 	#; RXE-13 : OrderingProvidersDEANumber  (see ORC-12)
+ 	set %occ="" for {
+		set %occ=$$$RXEOrderingProvidersDEANumber(%occ) quit:%occ=""
+		do ..By("<OrderedBy>",,
+			"CareProvider",
+			$$$RXEOrderingProvidersDEANumberAssigningAuthority(%occ),
+			$$$RXEOrderingProvidersDEANumberIDNumber(%occ),
+			$$$RXEOrderingProvidersDEANumberFamilyNameSurname(%occ),
+			$$$RXEOrderingProvidersDEANumberGivenName(%occ),
+			$$$RXEOrderingProvidersDEANumberMiddleName(%occ),
+			$$$RXEOrderingProvidersDEANumberNamePrefix(%occ),
+			$$$RXEOrderingProvidersDEANumberNameSuffix(%occ),
+			$$$RXEOrderingProvidersDEANumberProfessionalSuffix(%occ))
+		quit  // only one
+ 	}
+ 	
+ 	#; RXE-15 : PrescriptionNumber
+ 	do ..write("<PrescriptionNumber>"_$$$RXEPrescriptionNumber_"</PrescriptionNumber>")
+ 	
+ 	#; RXE-22 : GivePerTimeUnit
+ 	do ..write(cr_"<RateTimeUnit>"_$$$RXEGivePerTimeUnit_"</RateTimeUnit>")
+ 	
+ 	#; RXE-23 : GiveRateAmount
+ 	do ..write(cr_"<RateAmount>"_$$$RXEGiveRateAmount_"</RateAmount>")
+ 	
+ 	#; RXE-24 : GiveRateUnits
+ 	if ($$$RXEGiveRateUnitsText'="")||($$$RXEGiveRateUnitsIdentifier'="") {
+		do ..write(cr_"<RateUnits>")
+		do ..write(cr_"<SDACodingStandard>"_$$$RXEGiveRateUnitsNameofCodingSystem_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$RXEGiveRateUnitsIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$RXEGiveRateUnitsText_"</Description>")
+		do ..write(cr_"</RateUnits>")
+ 	}
+ 	
+ 	#; RXE-25 : GiveStrength
+ 	do ..write(cr_"<DoseQuantity>"_$$$RXEGiveStrength_"</DoseQuantity>")
+ 	
+ 	#; RXE-26 : GiveStrengthUnits
+ 	if ($$$RXEGiveStrengthUnitsIdentifier'="")||($$$RXEGiveStrengthUnitsText'="") {
+		do ..write(cr_"<DoseUoM>")
+		do ..write(cr_"<SDACodingStandard>"_$$$RXEGiveStrengthUnitsNameofCodingSystem_"</SDACodingStandard>")
+		do ..write(cr_"<Code>"_$$$RXEGiveStrengthUnitsIdentifier_"</Code>")
+		do ..write(cr_"<Description>"_$$$RXEGiveStrengthUnitsText_"</Description>")
+		do ..write(cr_"</DoseUoM>")
+	}
+	
+	#; RXE-27 : Indication
+ 	set %occ="" for {
+		set %occ=$$$RXEIndication(%occ) quit:%occ=""
+		if $$$RXEIndicationText(%occ)'="" {
+			do ..write(cr_"<Indication>"_$$$RXEIndicationText(%occ)_"</Indication>") 
+		} else {
+			do ..write(cr_"<Indication>"_$$$RXEIndicationIdentifier(%occ)_"</Indication>") 
+		}
+		quit  // only one
+ 	}
+ 	
+ 	#; RXE-33 : GiveDrugStrengthVolume
+ 	do ..write(cr_"<StrengthVolume>"_$$$RXEGiveDrugStrengthVolume_"</StrengthVolume>")
+
+ 	#; RXE-34 : GiveDrugStrengthVolumeU
+ 	if ($$$RXEGiveDrugStrengthVolumeUnitsText'="") {
+		do ..write(cr_"<StrengthVolumeUnits>"_$$$RXEGiveDrugStrengthVolumeUnitsText_"</StrengthVolumeUnits>") 
+	 } else {
+		do ..write(cr_"<StrengthVolumeUnits>"_$$$RXEGiveDrugStrengthVolumeUnitsIdentifier_"</StrengthVolumeUnits>") 	 
+	 }
+	 #; RXE-44 - HEP-731 - Added for Custom Order Category
+	 if $Get(^||HS.Data("RXE")){
+		 	Set tOrderCategory=$$$xml($Get(^||HS.Data(^||HS.Data("RXE"),44,1)))
+		 	if tOrderCategory'="" {
+			 	do ..write(cr_"<OrderCategory>")
+				do ..write(cr_"<Code>"_tOrderCategory_"</Code>")
+				do ..write(cr_"</OrderCategory>")
+			 	}
+	 	}
+}
+
+}
