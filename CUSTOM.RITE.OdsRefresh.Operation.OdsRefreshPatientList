@@ -1,0 +1,80 @@
+Class CUSTOM.RITE.OdsRefresh.Operation.OdsRefreshPatientList Extends (Ens.BusinessOperation, Ens.Util.FunctionSet)
+{
+
+/// Query HSODS HS_Flash.StatTable determine MPIID exist on ODS
+Method OnMessage(pRequest As CUSTOM.RITE.OdsRefresh.Message.OdsRefreshPatientListRequest, Output pResponse As CUSTOM.RITE.OdsRefresh.Message.OdsRefreshPatientListResponse) As %Status
+{
+	
+	Set tStatus=$$$OK
+	Set pResponse = ##class(CUSTOM.RITE.OdsRefresh.Message.OdsRefreshPatientListResponse).%New()
+
+	Try {
+		ZN "HSODS"
+		
+		Set MPIIDFound = ""
+		
+		Set MPIIDCount = 0
+		
+		Set ^||MatchCount = 0 
+		
+		Set ^||OdsQueryStartTime = $ZDT($H,3,1)
+		
+		Set MPIIDList = pRequest.MPIID
+		
+		If (pRequest.MatchCount > 0){
+			For Iter = 1:1:$LENGTH(MPIIDList,","){
+				Set MPIID = $Piece(MPIIDList,",",Iter)
+				If $Data(^HS.Flash.StatisticsD(MPIID)){
+					Set MPIIDCount = MPIIDCount+1
+					Set MPIIDFound = MPIIDFound_","_MPIID
+				}
+			}
+			Set tMPIIDList = $LISTFROMSTRING($ZSTRIP(MPIIDFound,"<>",","),",")
+			Set tStatus = ##class(CUSTOM.CORE.Flash.Utility).PurgeByMPIID(tMPIIDList)
+		}
+		Set pResponse.MPIID = $ZSTRIP(MPIIDFound,"<>",",")
+		Set pResponse.MatchCount = MPIIDCount
+		
+		Set ^||MatchCount = MPIIDCount
+				
+	}
+	Catch (ex){
+		Set tStatus = ex.AsStatus()
+		$$$LOGERROR($SYSTEM.Status.GetErrorText(tStatus))		
+	}
+	ZN "RITE"
+	; Call Metrics
+	Set tStatus = ..UpdateMetrics(^||MatchCount, ^||OdsQueryStartTime)
+	
+	Quit tStatus
+}
+
+Method UpdateMetrics(pMatchCount As %String, tOdsQueryStartTime As %String) As %Status
+{
+	Set tStatus=$$$OK
+
+	Try { 
+		s tStatement = ##class("%SQL.Statement").%New()
+	
+		s tQuery = "UPDATE CUSTOM_RITE_OdsRefresh_Metrics.OdsRefreshMetrics "
+		s tQuery = tQuery _ "SET OdsMatchCount = '" _ pMatchCount _ "', OdsQueryStartTime = '" _ tOdsQueryStartTime _ "' "
+		s tQuery = tQuery _ "WHERE SessionID = '" _ ..%SessionId _ "'"
+	
+		s tStatus = tStatement.%Prepare(.tQuery)
+	
+		If $$$ISERR(tStatus) {
+			return tStatus
+		}
+		Else {
+			s tSQLResults = tStatement.%Execute()	
+		}
+	}
+	Catch (ex){
+		Set tStatus = ex.AsStatus()
+		$$$LOGERROR($SYSTEM.Status.GetErrorText(tStatus))
+	}
+	
+	quit tStatus
+}
+
+}
