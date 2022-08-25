@@ -1,0 +1,89 @@
+Class CUSTOM.RITE.OdsRefresh.Metrics.OdsRefreshMetrics Extends (%Persistent, %XML.Adaptor)
+{
+
+Property SessionID As %String;
+
+Property HsaaQueryStartTime As %String;
+
+Property HsaaQueryEndTime As %String;
+
+Property HsaaQueryTimeCalculated As %String;
+
+Property OdsQueryStartTime As %String;
+
+Property OdsQueryEndTime As %String;
+
+Property OdsQueryTimeCalculated As %String;
+
+Property Entity As %String;
+
+Property InCode As %String;
+
+Property InCodingSystem As %String;
+
+Property HsaaQuery As %String(MAXLEN = 500);
+
+Property HsaaMatchCount As %String;
+
+Property OdsMatchCount As %String;
+
+Property InDescription As %String(MAXLEN = "");
+
+Storage Default
+{
+<Data name="OdsRefreshMetricsDefaultData">
+<Value name="1">
+<Value>%%CLASSNAME</Value>
+</Value>
+<Value name="2">
+<Value>SessionID</Value>
+</Value>
+<Value name="3">
+<Value>HsaaQueryStartTime</Value>
+</Value>
+<Value name="4">
+<Value>HsaaQueryEndTime</Value>
+</Value>
+<Value name="5">
+<Value>HsaaQueryTimeCalculated</Value>
+</Value>
+<Value name="6">
+<Value>OdsQueryStartTime</Value>
+</Value>
+<Value name="7">
+<Value>OdsQueryEndTime</Value>
+</Value>
+<Value name="8">
+<Value>OdsQueryTimeCalculated</Value>
+</Value>
+<Value name="9">
+<Value>Entity</Value>
+</Value>
+<Value name="10">
+<Value>InCode</Value>
+</Value>
+<Value name="11">
+<Value>InCodingSystem</Value>
+</Value>
+<Value name="12">
+<Value>HsaaQuery</Value>
+</Value>
+<Value name="13">
+<Value>HsaaMatchCount</Value>
+</Value>
+<Value name="14">
+<Value>OdsMatchCount</Value>
+</Value>
+<Value name="15">
+<Value>InDescription</Value>
+</Value>
+</Data>
+<DataLocation>^CUSTOM.RITC4DC.OdsRefreshMB609D</DataLocation>
+<DefaultData>OdsRefreshMetricsDefaultData</DefaultData>
+<IdLocation>^CUSTOM.RITC4DC.OdsRefreshMB609D</IdLocation>
+<IndexLocation>^CUSTOM.RITC4DC.OdsRefreshMB609I</IndexLocation>
+<StreamLocation>^CUSTOM.RITC4DC.OdsRefreshMB609S</StreamLocation>
+<Type>%Library.CacheStorage</Type>
+}
+
+}
