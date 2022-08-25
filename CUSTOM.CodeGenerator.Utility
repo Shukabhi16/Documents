@@ -1,0 +1,1459 @@
+/// Utility to grab Json  stream from Json
+/// Deserialize it into the Json Object
+Class CUSTOM.CodeGenerator.Utility Extends %RegisteredObject
+{
+
+/// w ##Class(CUSTOM.CodeGenerator.Utility).%New().Parser("C:\Test\In\EnsembleToHealthshareSda.json")
+Method Parser(pFile As %String = "") As %Status
+{
+	#; D ##class(CUSTOM.CodeGenerator.Utility).%New().Parser("C:\Users\G890583\Desktop\Code Util\TEST JSON\FromRosterSplitFile_1.json")
+    W #
+    If (pFile="") {
+	    set dir = "C:\source\nslij\int\CUSTOM\CodeGenerator\"
+		set file=$ZSEARCH(dir_"*.JSON")
+		Set inc=1
+		while file'="" {
+   			write !,"  "_inc_"). "_file
+   			Set fileInput(inc)=file
+   			Set inc=inc+1
+   			set file=$ZSEARCH("")
+		}
+		Write !!,"Filepath not provided, above are the json file we have in the source control..",!
+		Write "Do you want to take any file as an input ? (Y/N)  " read option#1
+		Set option=$zconvert(option,"L")
+     	 If (option="y") {
+	     	 Write !!,"Enter the option between 1 - "_(inc-1)_": " read num#2
+	     	 Set num=+num
+	     	 If (num=0) { Write !," Wrong input.. Quitting.." Quit }
+	     	 If (num'?1.N) { Write !," Wrong input.. Quitting.." Quit }
+	     	 If (num>(inc-1)) { Write !," Wrong input.. Quitting.." Quit }
+     	 }
+     	 else {
+	     	 Write !!,"If you have input file, please call the ""Parse()"" with the file path.",!!
+	     	 Write "Quitting the process..",!
+	     	 Quit
+     	 }
+     	 
+		Write !!,"Input file: "_fileInput(num)
+		Set pFile=fileInput(num)
+    }
+    
+    
+    Set stream=##class(%Stream.FileCharacter).%New()
+    Set tSc=$$$OK
+    Set tSc=stream.LinkToFile(pFile)
+    If ('tSc) W "Error on linking file "_pFile,! Quit
+    try {
+	    #Dim JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest
+	    Set tSc = ##class(%ZEN.Auxiliary.jsonProvider).%ConvertJSONToObject(stream,"CUSTOM.CodeGenerator.Request.JsonRequest",.JsonObj,1)
+		Set JsonObj.NamespaceHIE=$ZConvert(JsonObj.NamespaceHIE,"U")
+		Set JsonObj.NamespaceINT=$ZConvert(JsonObj.NamespaceINT,"U")
+		Set JsonObj.Facility=$ZConvert(JsonObj.Facility,"U")
+		Set stagingMember=JsonObj.StagingMember
+		If (stagingMember'="") {
+			Set len=$Length(stagingMember,".")
+			Set JsonObj.StagingTable=$Replace($Piece(stagingMember,".",1,(len-1)),".","_")_"."_$Piece(stagingMember,".",len)
+		}
+	    Set tSc = ..CreateProject(JsonObj)
+	    W !!!,"Utility Exeuted and below the outcome of the utility"
+	    w !,"--------------------------------------------------"
+	    w !
+	    For Iter = 1:1:JsonObj.Status.Count(){
+		    W !, "    "_Iter_"). "_JsonObj.Status.GetAt(Iter)
+	    }
+    } catch (ex) {
+	    w ex.AsStatus()
+    }
+    Quit tSc
+}
+
+Method CreateProject(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Status
+{
+   W !,"Running on Namespace: "_$NAMESPACE
+   Set projectName=JsonObj.ProjectName
+   Set isexists=0
+   If ##class(%Studio.Project).%ExistsId(projectName)
+   {
+      Set message="Project '"_projectName_"' already exists in the namespace: "_$NAMESPACE
+      W !,message
+      Set existsPrj=##class(%Studio.Project).%OpenId(projectName)
+      For iter=1:1:existsPrj.Items.Count()
+      {
+         W !," "_existsPrj.Items.GetAt(iter).Name_"."_existsPrj.Items.GetAt(iter).Type
+      } 
+      W !!," Do you want to update the project(Default: N): (Y/N): " read option#1
+      Set option=$zconvert(option,"L")
+      If (option'="y")
+      {
+         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+         Quit $$$OK
+      }
+      Set isexists=1
+   }
+   W:(isexists=1) !," Updating the Project started: "_projectName,!
+   W:(isexists=0) !," Creating New Project started: "_projectName,!
+   Set:(isexists=1) JsonObj.CodeGeneratedPRJ=##class(%Studio.Project).%OpenId(projectName)
+   Set:(isexists=0) JsonObj.CodeGeneratedPRJ=##class(%Studio.Project).%New()
+   Set JsonObj.CodeGeneratedPRJ.Name=projectName
+   Set JsonObj.CodeGeneratedPRJ.Description="This project is created from the utility, CUSTOM.CodeGenerator.Utility"
+   Set tSc=JsonObj.CodeGeneratedPRJ.%Save()
+   If $System.Status.IsError(tSc)
+   {
+      Set errorMessage=$System.Status.GetOneStatusText(tSc)
+      Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+      Quit $$$OK
+   }
+   #; Invoke Patch, DTL and Rules method to create and add items to the project.
+   W !,"Invoking the Patch Creation.."
+     Do ..CreatePatch(JsonObj)
+   W !,"Invoking the Message Class Creation.."  
+     Do ..CreateMesssageCls(JsonObj)
+   W !,"Invoking the Rules Creation.."
+     Do ..CreateRouterProcess(JsonObj)
+   W !,"Invoking the DTL Creation.."
+     Do ..CreateTransformation(JsonObj)
+   W !,"Invoking the Lookup Creation.."
+     Do ..CreateLUTs(JsonObj)
+  
+   
+   #;Re saving the Project again.
+   Set tSc=JsonObj.CodeGeneratedPRJ.%Save()
+   If $System.Status.IsError(tSc){
+      Set errorMessage=$System.Status.GetOneStatusText(tSc)
+      Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+      Quit $$$OK
+   }
+   Set message="Project '"_projectName_"' "_ $Case(isexists,0:"created",1:"updated")_" in the namespace: "_$NAMESPACE
+   Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+   Quit $$$OK
+}
+
+// Patch
+
+Method CreatePatch(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Status
+{
+   Set patchclassString=JsonObj.Classes.Patch
+   Set extends=$p(patchclassString,"^",2)
+   Set:(extends="") extends="Workbench.SourceControl.Deployment"
+   Set className=$p(patchclassString,"^",1)
+   
+   If ##class(%Dictionary.ClassDefinition).%ExistsId(className) 
+   {
+      Set message=" Patch Class '"_className_"' already exists in the namespace: "_$NAMESPACE
+      W !!, message
+      W !," Do you want to delete and create new patch class(Default: N): (Y/N): " read option#1
+      Set option=$zconvert(option,"L")
+      If (option'="y")
+      {
+         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+         Do JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+         Quit $$$OK
+      }
+      If (option="y")
+      {  
+         Do ##class(%Dictionary.ClassDefinition).%DeleteId(className) 
+      }
+   }
+   W !,"Creating Patch class: "_className
+   Set compileAfter=$p(patchclassString,"^",5)
+   Set dependsOn=$p(patchclassString,"^",4)
+   Do ..CreateClass(className,extends,.classObj,compileAfter,dependsOn)
+
+   #; Creating CustomNamespaceList method template to the class.
+     Do ..AddMethodToClass(classObj,"CustomNamespaceList",0,"%String","",$increment(inc),..CustomNamespaceListImple(JsonObj))
+        
+   #; Creating PostInstall method template to the class.
+     #; Do ..AddMethodToClass(classObj,"PostInstall",1,"%Status","",$increment(inc))
+        
+   #; Creating ClassMethod Template as: GetEnableItemList(ByRef pEnableList As %ListOfDataTypes) As %Status
+     Do ..AddMethodToClass(classObj,"GetEnableItemList",1,"%Status","&pEnableList:%ListOfDataTypes",$increment(inc),..GetItemListImple(JsonObj,"pEnableList"))
+                
+   #; Creating ClassMethod Template as: GetDisableItemList(ByRef pDisableList As %ListOfDataTypes) As %Status
+     Do ..AddMethodToClass(classObj,"GetDisableItemList",1,"%Status","&pDisableList:%ListOfDataTypes",$increment(inc),..GetItemListImple(JsonObj,"pDisableList"))
+     
+    #; Adding XDATA for Personal, Dev, QA, Stage
+   Do ..GenerateXDataConfiguration(JsonObj,.tStream)
+   For env="Personal","Dev","QA","Stage","Prod"
+   {
+	   #; Need to call GenerateXData for PROD
+	   Do:(env="Prod") ..GenerateXDataConfiguration(JsonObj,.tStream,"PROD")
+	   Do ..AddXDataToClass(classObj,env,$increment(inc),tStream)
+   }
+   
+   Set tSc=classObj.%Save()
+   If $System.Status.IsError(tSc)
+   {
+      Set errorMessage=$System.Status.GetOneStatusText(tSc)
+      Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+      Quit $$$OK
+   }
+   
+   Do $System.OBJ.Compile(className,"cuk")
+   
+   #; Add the class to the Project
+   Set tSc=JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+   If $System.Status.IsError(tSc)
+   {
+      Set errorMessage=$System.Status.GetOneStatusText(tSc)
+      Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+      Quit $$$OK
+   }
+   Set message="Patch class '"_className_"' created in the namespace: "_$NAMESPACE
+   Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+   
+   
+   #; Staging table / Gateway creation.
+   If (JsonObj.StagingGateway'="") {
+	   Set stagingGatewayCls=JsonObj.StagingGateway
+	   Set proceed=1
+	   If ##class(%Dictionary.ClassDefinition).%ExistsId(stagingGatewayCls) 
+	   {
+	      Set message=" StagingGateway class: '"_stagingGatewayCls_"' already exists in the namespace: "_$NAMESPACE
+	      W !!, message
+	      W !," Do you want to delete and create new StagingGateway class(Default: N): (Y/N): " read option#1
+	      Set option=$zconvert(option,"L")
+	      If (option'="y")
+	      {
+	         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+	         Do JsonObj.CodeGeneratedPRJ.AddItem(stagingGatewayCls,"cls")
+	         Set proceed=0
+	      }
+	      If (option="y")
+	      {  
+	         Do ##class(%Dictionary.ClassDefinition).%DeleteId(stagingGatewayCls)
+	      }
+	   }
+	   If (proceed=1) {
+		     Kill classObj1
+	         Set extends="%RegisteredObject, CUSTOM.CORE.SplitFile.Dynamic.IStagingGateway"
+	         #Dim classObj1 As %Dictionary.ClassDefinition
+	         Set tSc=..CreateClass(stagingGatewayCls,extends,.classObj1)
+	         If $System.Status.IsError(tSc)
+	         {
+	            Set errorMessage=$System.Status.GetOneStatusText(tSc)
+	            Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+	         }
+	         Set classObj1.CompileAfter="CUSTOM.CORE.SplitFile.Dynamic.IStagingGateway"
+	         Do classObj1.%Save()
+	         Do:($System.Status.IsOK(tSc)) $System.OBJ.Compile(stagingGatewayCls,"cuk"),JsonObj.CodeGeneratedPRJ.AddItem(stagingGatewayCls,"cls")
+	         Do ..AddMessageToJSON(JsonObj,tSc,"Successfully created class "_stagingGatewayCls)
+	      }
+   }
+   If (JsonObj.StagingMember'="") {
+	   Set stagingMemberCls=JsonObj.StagingMember
+	   Set proceed=1
+	   If ##class(%Dictionary.ClassDefinition).%ExistsId(stagingMemberCls) 
+	   {
+	      Set message=" StagingMember class: '"_stagingMemberCls_"' already exists in the namespace: "_$NAMESPACE
+	      W !!, message
+	      W !," Do you want to delete and create new StagingMember class(Default: N): (Y/N): " read option#1
+	      Set option=$zconvert(option,"L")
+	      If (option'="y")
+	      {
+	         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+	         Do JsonObj.CodeGeneratedPRJ.AddItem(stagingMemberCls,"cls")
+	         Set proceed=0
+	      }
+	      If (option="y")
+	      {  
+	         Do ##class(%Dictionary.ClassDefinition).%DeleteId(stagingMemberCls)
+	      }
+	   }
+	   If (proceed=1) {
+		     Kill classObj1
+	         Set extends="%Persistent, CUSTOM.CORE.SplitFile.Dynamic.IStagedRecord"
+	         Set tSc=..CreateClass(stagingMemberCls,extends,.classObj1)
+	         If $System.Status.IsError(tSc)
+	         {
+	            Set errorMessage=$System.Status.GetOneStatusText(tSc)
+	            Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+	         }
+	         Set param("MAXLEN")=128
+	         Do ..AddPropertyToClass(classObj1,"PrimaryID","%String",,.param,"Primary Id",.propObj)
+	         Set propObj.SqlColumnNumber=2
+	         Do classObj1.Properties.Insert(propObj)
+	         
+	         Do ..AddIndexToClass(classObj1,"IdxPrimaryID","PrimaryID",,"Index on PrimaryId",,1)
+	         Do classObj1.%Save()
+	         
+	         Do:($System.Status.IsOK(tSc)) $System.OBJ.Compile(stagingMemberCls,"cuk"),JsonObj.CodeGeneratedPRJ.AddItem(stagingMemberCls,"cls")
+	          Do ..AddMessageToJSON(JsonObj,tSc,"Successfully created class "_stagingMemberCls)
+	      }
+   }
+   #; Crating Business Service, Process and Operation classes.
+   For Iter=1:1:JsonObj.Classes.Components.BusinessService.Count()
+   {
+      Set fileData=JsonObj.Classes.Components.BusinessService.GetAt(Iter)
+      Set itemName=$p(fileData,"^",1)
+      Set className=$p(fileData,"^",2)
+      If $E(className,1,6)="CUSTOM"
+      {
+	     If (className["CUSTOM.CORE.") {
+		     Continue
+	     }
+         Set extents=$p(fileData,"^",3)
+         If ##class(%Dictionary.ClassDefinition).%ExistsId(className) {
+		      Set message=" Business service Class '"_className_"' already exists in the namespace: "_$NAMESPACE
+		      W !!, message
+		      W !," Do you want to delete and create new message class(Default: N): (Y/N): " read option#1
+		      Set option=$zconvert(option,"L")
+		      If (option'="y")
+		      {
+		         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+		         Do JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+		         CONTINUE
+		      }
+		      If (option="y")
+		      {
+		         Do ##class(%Dictionary.ClassDefinition).%DeleteId(className) 
+		      }
+		  }
+		  Kill classObj1
+		  Set compileAfter=$p(fileData,"^",5)
+   		  Set dependsOn=$p(fileData,"^",4)
+         Set tSc=..CreateClass(className,extents,.classObj1,compileAfter,dependsOn)
+         If $System.Status.IsError(tSc)
+         {
+            Set errorMessage=$System.Status.GetOneStatusText(tSc)
+            Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+         }
+         If ($zconvert(extents,"L")="custom.core.service.splitfiledynamicservice") {
+	         Set param("MAXLEN")=1024
+	         Do ..AddPropertyToClass(classObj1,"StagingGateway","%String",""""_JsonObj.StagingGateway_"""",.param,"Gateway Class to use for this split file.")
+			 Do ..AddPropertyToClass(classObj1,"StagingSqlTable","%String",""""_JsonObj.StagingTable_"""",.param,"SQL Table of Percistent Class to use for this split file.")
+			 Do ..AddPropertyToClass(classObj1,"StagingClass","%String",""""_JsonObj.StagingMember_"""",.param,"Persistent Class to use for this split file.")
+			 Do classObj1.%Save()
+		 }
+         Do:($System.Status.IsOK(tSc)) $System.OBJ.Compile(className,"cuk"),JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+          Do ..AddMessageToJSON(JsonObj,tSc,"Successfully created class "_className)
+      }
+   }
+   For Iter=1:1:JsonObj.Classes.Components.BusinessProcess.Count()
+   {
+		Set fileData=JsonObj.Classes.Components.BusinessProcess.GetAt(Iter)
+		Set itemName=$p(fileData,"^",1)
+		Set className=$p(fileData,"^",2)
+		If $E(className,1,6)="CUSTOM"
+		{
+			 If (className["CUSTOM.CORE.") {
+		         Continue
+	   		  }
+			Set extents=$p(fileData,"^",3)
+			If ##class(%Dictionary.ClassDefinition).%ExistsId(className) {
+		      Set message=" Business process class '"_className_"' already exists in the namespace: "_$NAMESPACE
+		      W !!, message
+		      W !," Do you want to delete and create new message class(Default: N): (Y/N): " read option#1
+		      Set option=$zconvert(option,"L")
+		      If (option'="y")
+		      {
+		         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+		         Do JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+		         CONTINUE
+		      }
+		      If (option="y")
+		      {
+		         Do ##class(%Dictionary.ClassDefinition).%DeleteId(className) 
+		      }
+		  	}
+		  	Kill classObj1
+		  	Set compileAfter=$p(fileData,"^",5)
+   		  Set dependsOn=$p(fileData,"^",4)
+			Set tSc=..CreateClass(className,extents,.classObj1,compileAfter,dependsOn)
+			If $System.Status.IsError(tSc)
+			{
+				Set errorMessage=$System.Status.GetOneStatusText(tSc)
+				Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+			}
+			If ($zconvert(extents,"L")="custom.core.process.splitfiledynamicprocess") {
+				 Set param("MAXLEN")=1024
+				 Set stagingGateway=JsonObj.StagingGateway
+				 Do ..AddPropertyToClass(classObj1,"StagingGateway","%String",""""_stagingGateway_"""",.param,"Gateway Class to use for this split file.")
+				 
+				 Do ..AddMethodToClass(classObj1,"CustomPayloadMapping",0,"%Status","pPayLoad,pInputRequest:%RegisteredObject,&pOutputRequest:%RegisteredObject",2,..CustomPayloadMappingImple(JsonObj),"Method used to perform custom mapping from DynamicSplitFileRequest to message type specific for the feed <br/>")
+				
+				 Do classObj1.%Save()
+			}
+			Do:($System.Status.IsOK(tSc)) $System.OBJ.Compile(className,"cuk"),JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+			 Do ..AddMessageToJSON(JsonObj,tSc,"Successfully created class "_className)
+		}
+   }
+  	#; Adding Business Opeartion
+   For Iter=1:1:JsonObj.Classes.Components.BusinessOperation.Count()
+   {
+      Set fileData=JsonObj.Classes.Components.BusinessOperation.GetAt(Iter)
+      Set itemName=$p(fileData,"^",1)
+      Set className=$p(fileData,"^",2)
+      If $E(className,1,6)="CUSTOM"
+      {
+	       If (className["CUSTOM.CORE.") {
+		     Continue
+	     }
+         Set extents=$p(fileData,"^",3)
+         If ##class(%Dictionary.ClassDefinition).%ExistsId(className) {
+		      Set message=" Business process class '"_className_"' already exists in the namespace: "_$NAMESPACE
+		      W !!, message
+		      W !," Do you want to delete and create new message class(Default: N): (Y/N): " read option#1
+		      Set option=$zconvert(option,"L")
+		      If (option'="y")
+		      {
+		         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+		         Do JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+		         CONTINUE
+		      }
+		      If (option="y")
+		      {
+		         Do ##class(%Dictionary.ClassDefinition).%DeleteId(className) 
+		      }
+		  	}
+		  	Kill classObj1
+		  	Set compileAfter=$p(fileData,"^",5)
+   		  Set dependsOn=$p(fileData,"^",4)	
+		 Set tSc=..CreateClass(className,extents,.classObj1,compileAfter,dependsOn)
+         If $System.Status.IsError(tSc)
+         {
+            Set errorMessage=$System.Status.GetOneStatusText(tSc)
+            Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+         }
+         Do:($System.Status.IsOK(tSc)) $System.OBJ.Compile(className,"cuk"),JsonObj.CodeGeneratedPRJ.AddItem(className,"cls")
+          Do ..AddMessageToJSON(JsonObj,tSc,"Successfully created class "_className)
+      }
+   }  
+  
+   Quit $$$OK
+}
+
+Method CreateRouterProcess(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Status
+{
+	Set tSC = $$$OK
+	try {
+		For RoutItr= 1:1: JsonObj.Classes.Rules.Count(){
+			Set tSC = ..CreateTransformation(JsonObj,.tTransformationName) //.pValues,pRecordSet,.tTransformationName
+			Set tRuleName = $Piece(JsonObj.Classes.Rules.GetAt(RoutItr),"^",1)
+			Set tSC = ..CreateUpdateBusinessRule(JsonObj,tRuleName,tTransformationName) 
+			Quit:$$$ISERR(tSC)
+			
+		}
+
+	} catch ex {
+		Set tSC = ex.AsStatus()
+	}
+	Quit tSC
+}
+
+Method CreateUpdateBusinessRule(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest, pRuleName As %String, tTransformationName As %String) As %Status
+{
+	Set tSC = $$$OK
+	try {
+		/// Get existing / create new Rule class and definition
+		Set tRuleDefinition = ""
+		Set ProductionName=""
+		Set IsTargetNotDefined = 0
+		Set LogRule = ""
+		Set:($zconvert(JsonObj.System,"U")="HIE") ProductionName=JsonObj.NamespaceHIE_".EdgeGatewayProduction"
+		Set:($Zconvert(JsonObj.System,"U")="INT") ProductionName="CUSTOM."_JsonObj.NamespaceINT_".Production."_JsonObj.NamespaceINT_"Production"
+		If ##class(%Dictionary.ClassDefinition).%ExistsId(pRuleName) {
+			Set tRuleClass = ##class(%Dictionary.ClassDefinition).%OpenId(pRuleName)
+		} Else {
+			Set tRuleClass = ##class(%Dictionary.ClassDefinition).%New(pRuleName)
+			Set tRuleClass.Super = "Ens.Rule.Definition"
+			Do tRuleClass.Parameters.Insert(..CreateClassParameter("RuleAssistClass","EnsLib.MsgRouter.RuleAssist"))
+
+			#; export to stream
+			Set tRuleDefinition = ##class(Ens.Rule.Model.ruleDefinition).%New()
+			Set tRuleDefinition.production=ProductionName	
+			Set tRuleDefinition.context="EnsLib.MsgRouter.RoutingEngine"		
+
+			///  create rule set
+			Set tRuleSet = ##class(Ens.Rule.Model.ruleSet).%New()
+			Do tRuleDefinition.ruleSets.Insert(tRuleSet)
+			Set Test = JsonObj.Classes.DTL.Count()
+			For OprItr=1:1:JsonObj.Classes.DTL.Count(){
+				Continue:'JsonObj.Classes.DTL.GetAt(OprItr).IsApplicableForRule
+				Set tFlag = JsonObj.Classes.DTL.GetAt(OprItr).SendTo
+				If tFlag = "" {
+					Set IsTargetNotDefined = 1
+					Set LogRule = LogRule_","_JsonObj.Classes.DTL.GetAt(OprItr).RuleName
+				}
+				Set tExisting = ##class(Ens.Rule.Model.rule).%New()
+				Set tExisting.disabled=0
+				Do tRuleSet.actions.Insert(tExisting)
+				;Set tExisting.name = $Piece(JsonObj.Classes.Components.BusinessOperation.GetAt(OprItr),"^",1)
+				Set tExisting.name = JsonObj.Classes.DTL.GetAt(OprItr).RuleName
+						
+				/// create and insert when condition
+				If $ZCONVERT(JsonObj.Classes.DTL.GetAt(OprItr).SendTo,"U") ["FILE" {
+					;For Prod
+					Set tWhen = ##class(Ens.Rule.Model.when).%New()
+					Do tExisting.whens.Insert(tWhen)
+					Do tWhen.conditionSet("(GetEnvironment()=""PROD"")")
+					Set tSend = ##class(Ens.Rule.Model.send).%New()
+					Set SentToOperations = ..GetSentToForProd(JsonObj.Classes.DTL.GetAt(OprItr).SendTo)
+					Set tSend.target=SentToOperations
+					Set tSend.transform=$Piece(JsonObj.Classes.DTL.GetAt(OprItr).Name,"^")
+					Do tWhen.actions.Insert(tSend)
+					;For Non Prod
+					Set tWhen = ##class(Ens.Rule.Model.when).%New()
+					Do tExisting.whens.Insert(tWhen)
+					Do tWhen.conditionSet("(GetEnvironment()!=""PROD"")")
+					//For DTLItr =1:1:$Length(tTransformationName,","){
+						Set tSend = ##class(Ens.Rule.Model.send).%New()
+						Set tSend.target=JsonObj.Classes.DTL.GetAt(OprItr).SendTo
+						Set tSend.transform=$Piece(JsonObj.Classes.DTL.GetAt(OprItr).Name,"^")
+						Do tWhen.actions.Insert(tSend)
+
+				}Else{
+					Set tWhen = ##class(Ens.Rule.Model.when).%New()
+					Do tExisting.whens.Insert(tWhen)
+					Do tWhen.conditionSet("(Document.Status=""Inactive"")")
+					Set tSend = ##class(Ens.Rule.Model.send).%New()
+					Set tSend.target=JsonObj.Classes.DTL.GetAt(OprItr).SendTo
+					Set tSend.transform=$Piece(JsonObj.Classes.DTL.GetAt(OprItr).Name,"^")
+					Do tWhen.actions.Insert(tSend)
+				}
+
+			}
+			/// Create and insert updated RuleDefinition XData
+			Set tXData = ##class(%Dictionary.XDataDefinition).%New()
+			Set tXData.Name = "RuleDefinition"
+			set tXData.parent=tRuleClass
+			set tXData.XMLNamespace = "http://www.intersystems.com/rule"		
+			
+			Set tSC = tRuleDefinition.XMLExportToStream(.tStream,,",indent()")
+			Set tXData.Data = tStream
+			Set tSC = tRuleClass.XDatas.Insert(tXData)
+			Quit:$$$ISERR(tSC)			
+		}
+
+		Set tSC = tRuleClass.%Save()
+		Do $system.OBJ.Compile(tRuleClass.Name,"fk-d")
+		Set tSc=JsonObj.CodeGeneratedPRJ.AddItem(tRuleClass.Name,"cls")
+		Do JsonObj.Status.InsertAt("Successfully created routing rule "_tRuleClass.Name,(JsonObj.Status.Count()+1))
+		If IsTargetNotDefined Do JsonObj.Status.InsertAt("Please update the target in rules: "_$ZSTRIP(LogRule,"<>",",")_" as created routing rule without setting up target  ",(JsonObj.Status.Count()+1))
+	} catch ex {
+		Set tSC = ex.AsStatus()
+		Do JsonObj.Status.InsertAt("unable to create routing rule "_tRuleClass.Name,(JsonObj.Status.Count()+1))
+
+	}
+	Quit tSC
+}
+
+Method CreateTransformation(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest, Output pTransformationName) As %Status
+{
+	Set tSC = $$$OK
+	try {
+		Set pTransformationName=""
+		For Iter=1:1:JsonObj.Classes.DTL.Count(){
+			Set tTransName = $Piece(JsonObj.Classes.DTL.GetAt(Iter).Name,"^",1)
+			Set tSuper = $Piece(JsonObj.Classes.DTL.GetAt(Iter).Name,"^",2)
+			Set tDependsOn=$Piece(JsonObj.Classes.DTL.GetAt(Iter).Name,"^",3)
+			If ##class(%Dictionary.ClassDefinition).%ExistsId(tTransName) {
+				Set tTransformClass = ##class(%Dictionary.ClassDefinition).%OpenId(tTransName)
+			} Else {
+				Set tTransformClass = ##class(%Dictionary.ClassDefinition).%New(tTransName)
+				Set tTransformClass.Super = tSuper
+				If JsonObj.Classes.DTL.GetAt(Iter).Name["Stream"{
+					Do tTransformClass.Parameters.Insert(..CreateClassParameter("MESSAGETRANSFORM",$Replace(tTransName,"Stream","")))
+				} Else {
+					Set tTransformClass.DependsOn = tDependsOn
+					Do tTransformClass.Parameters.Insert(..CreateClassParameter("IGNOREMISSINGSOURCE",1))
+					Do tTransformClass.Parameters.Insert(..CreateClassParameter("REPORTERRORS",1))
+					Do tTransformClass.Parameters.Insert(..CreateClassParameter("TREATEMPTYREPEATINGFIELDASNULL",0))
+
+					/// Create and insert updated RuleDefinition XData
+					Set tXData = ##class(%Dictionary.XDataDefinition).%New()
+					Set tXData.Name = "DTL"
+					Set tXData.XMLNamespace = "http://www.intersystems.com/dtl"
+					Set tStream = ##class(%Stream.TmpCharacter).%New()
+					Set tTransform = ##class(Ens.DTL.Transform).%New()
+					Set tTransform.SourceClass = $Piece(JsonObj.Classes.DTL.GetAt(Iter).SourceClass,"^",1)
+					Set tTransform.TargetClass = $Piece(JsonObj.Classes.DTL.GetAt(Iter).TargetClass,"^",1)
+					If tTransform.SourceClass="EnsLib.HL7.Message"{
+						Set tTransform.SourceDocType = $Piece(JsonObj.Classes.DTL.GetAt(Iter).SourceClass,"^",2)
+						Set tTransform.TargetDocType = $Piece(JsonObj.Classes.DTL.GetAt(Iter).TargetClass,"^",2)
+					}
+					Set tTransform.Create = "new"
+					Set tTransform.Language = "objectscript"
+					
+					;Do ..UpdateSettings("Transformation",tTransform,pRecordSet,.pValues)
+					/// user updates in UpdateDTL
+					Set tSC =  ..UpdateDTL(tTransform)
+					Quit:$$$ISERR(tSC)
+					
+					//Building Default Mapping content into XData stream
+					Set Actions = ##class(Ens.DTL.ActionList).%New()
+					Set tSC=$Select($P(JsonObj.Classes.DTL.GetAt(Iter)."Name","^",1)["ToBusRegistryAddUpdate":..AddBusRegistryMapping(.JsonObj,Iter,.Actions),
+									$P(JsonObj.Classes.DTL.GetAt(Iter)."Name","^",1)["ToHealthshareSda":..AddToHealthshareSdaMapping(.JsonObj,Iter,.Actions),
+									1:1)
+					Set tTransform.Actions = Actions
+					Set tSC = tTransform.GenerateXML(.tStream)
+					Quit:$$$ISERR(tSC)
+					Set tXData.Data = tStream
+					For tIdx = 1:1:tTransformClass.XDatas.Count() {
+						If tTransformClass.XDatas.GetAt(tIdx).Name="DTL" {
+							Do tTransformClass.XDatas.RemoveAt(tIdx)
+						}
+					}
+					Do tTransformClass.XDatas.Insert(tXData)					
+				}
+
+				Set tSC = tTransformClass.%Save()
+				Quit:$$$ISERR(tSC)
+				Set tSC = $system.OBJ.Compile(tTransformClass.Name,"fk-d")
+				Set tSc=JsonObj.CodeGeneratedPRJ.AddItem(tTransformClass.Name,"cls")
+			}
+			If pTransformationName=""{
+				Set pTransformationName = tTransName
+			}
+			else{
+				Set pTransformationName = pTransformationName_","_tTransName
+			}
+			Do JsonObj.Status.InsertAt("Successfully created DTL "_tTransName,(JsonObj.Status.Count()+1))
+		}
+
+	}catch ex {
+			Set tSC = ex.AsStatus()
+			Do JsonObj.Status.InsertAt("unable to create DTL "_tTransName,(JsonObj.Status.Count()+1))
+			Do JsonObj.Status.InsertAt($SYSTEM.Status.GetOneErrorText(tSC),(JsonObj.Status.Count()+1))
+	}
+	Quit tSC
+}
+
+Method CreateLUTs(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Status
+{
+	Set tSc = $$$OK
+	try{
+		For LUTIter = 1:1:JsonObj.Lookup.Count(){
+			Set Lookup = JsonObj.Lookup.GetAt(LUTIter)
+			Set tSc = ##Class(Ens.Util.LookupTable).%UpdateValue(Lookup,"key","Value",1)
+			#; Add the Look up table to the Project
+			Set tSc=JsonObj.CodeGeneratedPRJ.AddItem(Lookup_".lut")
+			Do JsonObj.Status.InsertAt("Successfully created look up table "_Lookup,(JsonObj.Status.Count()+1))
+		}
+	}
+	catch (ex) {
+		Do JsonObj.Status.InsertAt("Unable to create look up table "_Lookup,(JsonObj.Status.Count()+1))
+	}
+	Quit tSc
+}
+
+Method CreateMesssageCls(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Status
+{
+	Set tSc=$$$OK
+	try{
+		If (JsonObj.Request'=""){
+			For ReqIter = 1:1:JsonObj.Request.Count(){
+				Set ClsName = $Piece(JsonObj.Request.GetAt(ReqIter).Name,"^")
+				CONTINUE:ClsName=""
+			    If ##class(%Dictionary.ClassDefinition).%ExistsId(ClsName) 
+			    {
+			      Set message=" Message Class '"_ClsName_"' already exists in the namespace: "_$NAMESPACE
+			      W !!, message
+			      W !," Do you want to delete and create new message class(Default: N): (Y/N): " read option#1
+			      Set option=$zconvert(option,"L")
+			      If (option'="y")
+			      {
+			         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+			         Do JsonObj.CodeGeneratedPRJ.AddItem(ClsName,"cls")
+			         CONTINUE
+			      }
+			      If (option="y")
+			      {
+			         Do ##class(%Dictionary.ClassDefinition).%DeleteId(ClsName) 
+			      }
+			    }
+				Set Ext = $Piece(JsonObj.Request.GetAt(ReqIter).Name,"^",2)
+				Set tSc = ..CreateClass(ClsName,Ext,.ClsObj)
+				If (JsonObj.Request.GetAt(ReqIter).Property'=""){					
+					For PropIter = 1:1:JsonObj.Request.GetAt(ReqIter).Property.Count(){
+						Set PropName = $Piece(JsonObj.Request.GetAt(ReqIter).Property.GetAt(PropIter),"^")
+						CONTINUE:PropName=""
+						Set PropType = $Piece(JsonObj.Request.GetAt(ReqIter).Property.GetAt(PropIter),"^",2)
+						Set tSc = ..AddPropertyToClass(ClsObj,PropName,PropType)
+					}
+				}
+				Do ClsObj.%Save()
+				Set tSc = $SYSTEM.OBJ.Compile(ClsName,"cuk")
+				#; Add the class to the Project
+				Set tSc=JsonObj.CodeGeneratedPRJ.AddItem(ClsName,"cls")
+				Set errorMessage = "Successfully created Request Message Class "_ClsName
+				Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+			}
+			
+		}
+		If (JsonObj.Response'=""){
+			For ResIter = 1:1:JsonObj.Response.Count(){
+				Set ClsName = $Piece(JsonObj.Response.GetAt(ResIter).Name,"^")
+				CONTINUE:ClsName=""
+			    If ##class(%Dictionary.ClassDefinition).%ExistsId(ClsName) 
+			    {
+			      Set message=" Message Class '"_ClsName_"' already exists in the namespace: "_$NAMESPACE
+			      W !!, message
+			      W !," Do you want to delete and create new match class(Default: N): (Y/N): " read option#1
+			      Set option=$zconvert(option,"L")
+			      If (option'="y")
+			      {
+			         Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+			         Do JsonObj.CodeGeneratedPRJ.AddItem(ClsName,"cls")
+			         CONTINUE
+			      }
+			      If (option="y")
+			      {
+			         Do ##class(%Dictionary.ClassDefinition).%DeleteId(ClsName) 
+			      }
+			    }			
+				Set Ext = $Piece(JsonObj.Response.GetAt(ResIter).Name,"^",2)
+				Set tSc = ..CreateClass(ClsName,Ext,.ClsObj)
+				If (JsonObj.Response.GetAt(ResIter).Property'=""){					
+					For ReqPropIter = 1:1:JsonObj.Response.GetAt(ResIter).Property.Count(){
+						Set PropName = $Piece(JsonObj.Response.GetAt(ResIter).Property.GetAt(ReqPropIter),"^")
+						CONTINUE:PropName=""
+						Set PropType = $Piece(JsonObj.Response.GetAt(ResIter).Property.GetAt(ReqPropIter),"^",2)
+						Set tSc = ..AddPropertyToClass(ClsObj,PropName,PropType)
+					}
+				}
+				Do ClsObj.%Save()
+				Set tSc = $SYSTEM.OBJ.Compile(ClsName,"cuk")
+				#; Add the class to the Project
+				Set tSc=JsonObj.CodeGeneratedPRJ.AddItem(ClsName,"cls")
+				Set errorMessage = "Successfully created Request Message Class "_ClsName
+				Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))
+			}
+			
+		}
+
+	}
+	catch (ex){
+		Set errorMessage = "Unable to create Message Class "_ClsName
+		Do JsonObj.Status.InsertAt(errorMessage,(JsonObj.Status.Count()+1))		
+	}
+
+	Quit tSc
+}
+
+Method GenerateXDataConfiguration(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest, pStream As %Stream.TmpCharacter, Env = "") As %Status
+{
+   Set pStream = ##class(%Stream.TmpCharacter).%New()
+   Set Env=$ZCONVERT(Env,"U")
+   Set productionName=""
+   Set:($zconvert(JsonObj.System,"U")="HIE") productionName=JsonObj.NamespaceHIE_".EdgeGatewayProduction"
+   Set:($Zconvert(JsonObj.System,"U")="INT") productionName="CUSTOM."_JsonObj.NamespaceINT_".Production."_JsonObj.NamespaceINT_"Production"
+   Set namespace=""
+   Set:($zconvert(JsonObj.System,"U")="HIE") namespace=JsonObj.NamespaceHIE
+   Set:($Zconvert(JsonObj.System,"U")="INT") namespace=JsonObj.NamespaceINT
+   
+   Do pStream.WriteLine("<Configuration>")
+   Do pStream.WriteLine("<Namespace Name="""_namespace_""">")
+   Do pStream.WriteLine("<Production Name="""_productionName_""">")
+   
+    #; Adding Business service
+   For Iter=1:1:JsonObj.Classes.Components.BusinessService.Count()
+   {
+      Set fileData=JsonObj.Classes.Components.BusinessService.GetAt(Iter)
+      Set itemName=$p(fileData,"^",1)
+      Set className=$p(fileData,"^",2)
+      set extents=$p(fileData,"^",3)
+      Set category="ROSTER,RISK,"_$Zconvert(JsonObj.Facility,"U")_","_$Zconvert(JsonObj.SourceApplication,"U")_","_$Zconvert(JsonObj.TargetApplication,"U")
+      If ($zconvert(extents,"l")="custom.core.service.splitfiledynamicservice") {
+	    Set category=category_",FILE,SDA"
+   	   }
+       If ($zconvert(className,"l")="custom.core.service.xmlmessagetcpservice") {
+	    Set category=category_",SDA"
+   	   }
+      Do pStream.Write("<Item Name="""_itemName_""" Category="""_category_"""")
+      Do pStream.Write(" ClassName="""_className_""" PoolSize=""1"" Enabled=""true"" Foreground=""false"" DisableErrorTraps=""false"" Comment="""" LogTraceEvents=""false"" Schedule="""">")
+      Do pStream.WriteLine("")
+      if $zconvert(className,"l")["tcp"
+      {
+	     If $zconvert(className,"l")="custom.core.service.xmlmessagetcpservice" {
+		    kill array
+		    Set array("ProcessName")=$Piece(JsonObj.Classes.Components.BusinessProcess.GetAt(1),"^",1)
+		    Do pStream.WriteLine(..ReturnSetting("SERVICE","TCP",.array))
+	      }
+      }
+      Elseif $zconvert(className,"l")["file"
+      {
+	      If ($zconvert(extents,"L")="custom.core.service.splitfiledynamicservice") {
+	    	  Set processName=$Piece(JsonObj.Classes.Components.BusinessProcess.GetAt(1),"^",1)
+	     	 If processName="" {
+		 	     Set processName=JsonObj.Facility_JsonObj.SourceApplication_"To"_JsonObj.TargetApplication_"SdaRtr"
+	    	 }
+	    	 kill array
+	      	Set array("ProcessName")=processName
+	      	Set array("StagingGateway")=JsonObj.StagingGateway
+	      	Set array("StagingSqlTable")=JsonObj.StagingTable
+	      	Set array("StagingClass")=JsonObj.StagingMember
+	      	Do pStream.WriteLine(..ReturnSetting("SERVICE","FILE",.array))
+	      }
+	  }
+      Do pStream.WriteLine("</Item>")
+   }
+   
+   #; Adding Business process
+   For Iter=1:1:JsonObj.Classes.Components.BusinessProcess.Count()
+   {
+	Set fileData=JsonObj.Classes.Components.BusinessProcess.GetAt(Iter)
+	Set itemName=$p(fileData,"^",1)
+	Set className=$p(fileData,"^",2)
+	Set category="ROSTER,RISK,"_$Zconvert(JsonObj.Facility,"U")_","_$Zconvert(JsonObj.SourceApplication,"U")_","_$Zconvert(JsonObj.TargetApplication,"U")
+    set extents=$p(fileData,"^",3)
+    If ($zconvert(extents,"l")="custom.core.process.splitfiledynamicprocess") {
+	    Set category=category_",FILE,SDA"
+    }
+    If ($zconvert(className,"l")="hs.gateway.sda3.inboundprocess") {
+	    Set category=category_",SDA"
+    }
+	Do pStream.Write("<Item Name="""_itemName_""" Category="""_category_"""")
+	Do pStream.Write(" ClassName="""_className_""" PoolSize=""1"" Enabled=""true"" Foreground=""false"" DisableErrorTraps=""false"" Comment="""" LogTraceEvents=""false"" Schedule="""">")
+	Do pStream.WriteLine("")
+	If ($zconvert(extents,"l")="custom.core.process.splitfiledynamicprocess") {
+	    Kill array
+		Set array("RuleName")=$Piece(JsonObj.Classes.Rules.GetAt(1),"^",1)
+		Set:(JsonObj.Request.Count()) array("MessageClass")=$Piece(JsonObj.Request.GetAt(1).Name,"^")
+		Set array("StagingGateway")=JsonObj.StagingGateway
+		Do pStream.WriteLine(..ReturnSetting("PROCESS","FILE",.array))
+    }
+    If ($zconvert(className,"l")="hs.gateway.sda3.inboundprocess") {
+	  	Kill array
+		Do pStream.WriteLine(..ReturnSetting("PROCESS","SDA",.array))
+    }
+	
+	Do pStream.WriteLine("</Item>")
+	}
+   
+   #; Adding Business Opeartion
+   For Iter=1:1:JsonObj.Classes.Components.BusinessOperation.Count()
+   {
+      Set fileData=JsonObj.Classes.Components.BusinessOperation.GetAt(Iter)
+      Set itemName=$p(fileData,"^",1)
+      Set className=$p(fileData,"^",2)
+      Continue:((Env="PROD")&&($zconvert(className,"l")["file"))
+      Set category="ROSTER,FILE,RISK,"_$Zconvert(JsonObj.Facility,"U")_","_$Zconvert(JsonObj.SourceApplication,"U")_","_$Zconvert(JsonObj.TargetApplication,"U")
+      Do pStream.Write("<Item Name="""_itemName_""" Category="""_category_"""")
+      Do pStream.Write(" ClassName="""_className_""" PoolSize=""1"" Enabled=""true"" Foreground=""false"" DisableErrorTraps=""false"" Comment="""" LogTraceEvents=""false"" Schedule="""">")
+      Do pStream.WriteLine("")
+      if $zconvert(className,"l")["tcp"
+      {
+	      Do pStream.WriteLine(..ReturnSetting("OPERATION","TCP"))
+      }
+      Elseif $zconvert(className,"l")["file"
+      {
+	      Set array("FilePath")=itemName
+	      Do pStream.WriteLine(..ReturnSetting("OPERATION","FILE",.array))
+      }
+      Do pStream.WriteLine("</Item>")
+   }
+	Do pStream.WriteLine("</Production>")
+	Do pStream.WriteLine("</Namespace>")
+	Do pStream.WriteLine("</Configuration>")
+   Quit $$$OK
+}
+
+Method CreateClass(ClassName As %String, Extends As %String, Output classObj As %Dictionary.ClassDefinition, compileAfter = "", dependsOn = "") As %Status
+{
+	#; if any addition param need to set for class, using the classObject update in outside.
+   If ##class(%Dictionary.ClassDefinition).%ExistsId(ClassName) {
+	  Set classObj = ##class(%Dictionary.ClassDefinition).%OpenId(ClassName)
+	  Quit classObj
+   }
+   Set classObj = ##class(%Dictionary.ClassDefinition).%New(ClassName)
+   Set classObj.Super=Extends
+   Set classObj.ProcedureBlock=1
+   If (compileAfter'="") {
+	   Set classObj.CompileAfter=compileAfter
+   }
+   If (dependsOn'="") {
+	   Set classObj.DependsOn=dependsOn
+   }
+   Set classObj.Description="This class is created by CodeGenerator Utility"
+   Quit classObj.%Save()
+}
+
+Method AddPropertyToClass(classObj As %Dictionary.ClassDefinition, PropName As %String, PropType As %String, InitialExpression As %String = "", ByRef parameters = "", Description = "", Output PropObj As %Dictionary.PropertyDefinition) As %Status
+{
+	Set PropObj=##class(%Dictionary.PropertyDefinition).%New()
+	Set PropObj.Name = PropName
+	Set PropObj.Type = PropType
+	If (InitialExpression'="") {
+		Set PropObj.InitialExpression=InitialExpression
+	}
+	If $Data(parameters) {
+		Set key=""
+		for {
+			Set key=$o(parameters(key),1,value)
+			Quit:(key="")
+			Do PropObj.Parameters.SetAt(value,key)
+		}
+	}
+	If (Description'="") {
+	   Set PropObj.Description=Description
+   	}
+   	Do classObj.Properties.Insert(PropObj)
+	Quit $$$OK
+}
+
+Method AddMethodToClass(classObj As %Dictionary.ClassDefinition, Name, IsClassMethod, ReturnType, FormalSpec = "", SequenceNumber = 0, Implementation As %Stream.MethodGenerator = "", Description As %String = "") As %Status
+{
+   Set methodObj=##class(%Dictionary.MethodDefinition).%New()
+   Set methodObj.ClassMethod=IsClassMethod
+   Set methodObj.Name=Name
+   Set methodObj.ReturnType=ReturnType
+   Set methodObj.FormalSpec=FormalSpec
+   Set:(SequenceNumber>0) methodObj.SequenceNumber=SequenceNumber
+   Set methodObj.Implementation=Implementation
+   If (Description'="") {
+	   Set methodObj.Description=Description
+   }
+   Do classObj.Methods.Insert(methodObj)
+   Quit $$$OK
+}
+
+Method AddIndexToClass(classObj As %Dictionary.ClassDefinition, Name As %String, Properties = "", Output indexObj As %Dictionary.IndexDefinition, Description = "", DataNode = "", IsUnique = "", Type = "") As %Status
+{
+	Set indexObj=##class(%Dictionary.IndexDefinition).%New()
+	Set indexObj.Name=Name
+	Set indexObj.Description=Description
+	Set indexObj.Properties=Properties
+	If (DataNode'="") {
+		Set indexObj.Data=DataNode
+	}
+	If (IsUnique'="") {
+		Set indexObj.Unique=IsUnique
+	}
+	If (Type'="") {
+	Set indexObj.Type=Type }
+	Do classObj.Indices.Insert(indexObj)
+	Quit $$$OK
+}
+
+Method AddXDataToClass(classObj As %Dictionary.ClassDefinition, Name, SequenceNumber = 0, pStream As %Stream.TmpCharacter)
+{
+   Set tXData = ##class(%Dictionary.XDataDefinition).%New()
+   Set tXData.Name = Name
+   Set tXData.Data = pStream
+   Set:(SequenceNumber>0) tXData.SequenceNumber=SequenceNumber
+   Do classObj.XDatas.Insert(tXData)
+   Do classObj.%Save()
+}
+
+/// Create %Dictionary.ParameterDefinition object for name and default
+ClassMethod CreateClassParameter(pName, pDefault) As %Dictionary.ParameterDefinition
+{
+	Set tParameter = ##class(%Dictionary.ParameterDefinition).%New()
+	Set tParameter.Name=pName
+	Set tParameter.Default = pDefault
+	Quit tParameter
+}
+
+ClassMethod UpdateDTL(pTransform As Ens.DTL.Transform) As %Status [ CodeMode = expression ]
+{
+$$$OK
+}
+
+ClassMethod ReturnSetting(HostType, ClassType, ByRef Values)
+{
+	Set return=""
+	Set HostType=$ZCONVERT(HostType,"U")
+	If (HostType="SERVICE")
+	{ 
+		If (ClassType="FILE")
+		{
+			Set return="<Setting Target=""Adapter"" Name=""FileSpec"">Northwell HIE*.txt</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""TargetConfigNames"">"_$Get(Values("ProcessName"))_"</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Adapter"" Name=""ConfirmComplete"">1</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""HeaderRowCount"">1</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""AssumeInactive"">26</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""AssumeInactiveMeasure"">Calendar Days</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""QuoteEscape"">1</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""FieldDelimiter"">|</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""FieldID"">2</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Adapter"" Name=""ConfirmComplete"">1</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""StagingGateway"">"_$Get(Values("StagingGateway"))_"</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""StagingSqlTable"">"_$Get(Values("StagingSqlTable"))_"</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""StagingClass"">"_$Get(Values("StagingClass"))_"</Setting>"
+		}
+		If (ClassType="TCP")
+		{
+			Set return="<Setting Target=""Host"" Name=""TargetConfigNames"">"_$Get(Values("ProcessName"))_"</Setting>"_$c(10)
+    		Set return=return_"<Setting Target=""Adapter"" Name=""AcceptClassnames"">HS.Message.ECRUpdateRequest</Setting>"
+		}
+	}
+	ElseIf(HostType="PROCESS")
+	{
+		If (ClassType="FILE") {		
+			Set return="<Setting Target=""Host"" Name=""Validation""></Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""ActOnValidationError"">1</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""ActOnTransformError"">1</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""ReplyCodeActions"">E=D</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""BusinessRuleName"">"_$Get(Values("RuleName"))_"</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""SourceMessageClass"">"_$Get(Values("MessageClass"))_"</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""StagingGateway"">"_$Get(Values("StagingGateway"))_"</Setting>"
+		}
+		If (ClassType="SDA") {
+			Set return="<Setting Target=""Host"" Name=""InactivityTimeout"">0</Setting>"_$c(10)
+    		Set return=return_"<Setting Target=""Host"" Name=""ECRTarget"">CUSTOM.EDGE.Operation.Manager</Setting>"_$c(10)
+    		Set return=return_"<Setting Target=""Host"" Name=""MPIUpdateMode"">Always</Setting>"_$c(10)
+    		Set return=return_"<Setting Target=""Host"" Name=""UpdateECRDemographics"">1</Setting>"
+			
+		}
+	}
+	ElseIf(HostType="OPERATION")
+	{
+		If ClassType="TCP"
+		{
+			Set return="<Setting Target=""Host"" Name=""FailureTimeout"">60</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""ReplyCodeActions"">E*ConnectionLost=RD,E=D</Setting>"_$c(10)
+			Set return=return_"<Setting Target=""Host"" Name=""SaveReplies"">All</Setting>"
+		}
+		ElseIf(ClassType="FILE")
+		{
+			Set return="<Setting Target=""Host"" Name=""Filename"">"_$Get(Values("FilePath"))_"_%D.txt</Setting>"
+		}
+	}
+	Quit return
+}
+
+Method CustomNamespaceListImple(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Stream.MethodGenerator
+{
+	Set namespace=""
+   	Set:($zconvert(JsonObj.System,"U")="HIE") namespace=JsonObj.NamespaceHIE
+   	Set:($Zconvert(JsonObj.System,"U")="INT") namespace=JsonObj.NamespaceINT
+	Set methodObj=##class(%Stream.MethodGenerator).%New()
+	Set methodObj.Language="cache"
+	Set methodObj.CodeMode="code"
+	D methodObj.WriteLine("  Quit """_namespace_"""")
+	Quit methodObj
+}
+
+Method PostInstallImple(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Stream.MethodGenerator
+{
+	Set methodObj=##class(%Stream.MethodGenerator).%New()
+	Set methodObj.Language="cache"
+	Set methodObj.CodeMode="code"
+	D methodObj.WriteLine("  Quit $$$OK")
+	Quit methodObj
+}
+
+Method GetItemListImple(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest, Type = "pEnableList") As %Stream.MethodGenerator
+{
+	Set namespace=""
+   	Set:($zconvert(JsonObj.System,"U")="HIE") namespace=JsonObj.NamespaceHIE
+   	Set:($Zconvert(JsonObj.System,"U")="INT") namespace=JsonObj.NamespaceINT
+	Set methodObj=##class(%Stream.MethodGenerator).%New()
+	Set methodObj.Language="cache"
+	Set methodObj.CodeMode="code"
+	D methodObj.WriteLine($c(9)_"Set tStatus = $$$OK")
+	D methodObj.WriteLine($c(9)_"Set "_Type_" = ##class(%ListOfDataTypes).%New()")
+	D methodObj.WriteLine($c(9)_"Try{")
+	D methodObj.WriteLine($c(9,9)_"Set tEnv=$G(^zEnvFlag)")
+	For Iter=1:1:JsonObj.Classes.Components.BusinessService.Count()
+	{
+		Set fileData=JsonObj.Classes.Components.BusinessService.GetAt(Iter)
+     	Set itemName=$p(fileData,"^",1)
+     	D methodObj.WriteLine($c(9,9)_"Set tStatus = "_Type_".Insert("""_itemName_":"_namespace_""")")
+	}
+	For Iter=1:1:JsonObj.Classes.Components.BusinessProcess.Count()
+	{
+		Set fileData=JsonObj.Classes.Components.BusinessProcess.GetAt(Iter)
+     	Set itemName=$p(fileData,"^",1)
+     	D methodObj.WriteLine($c(9,9)_"Set tStatus = "_Type_".Insert("""_itemName_":"_namespace_""")")
+	}
+	For Iter=1:1:JsonObj.Classes.Components.BusinessOperation.Count()
+	{
+		Set fileData=JsonObj.Classes.Components.BusinessOperation.GetAt(Iter)
+     	Set itemName=$p(fileData,"^",1)
+     	If $Zconvert(itemName,"l")["file"
+     	{
+	     	D methodObj.WriteLine($c(9,9)_"If tEnv'=""PROD"" {")
+	     	D methodObj.WriteLine($c(9,9,9)_"Set tStatus = "_Type_".Insert("""_itemName_":"_namespace_""")")
+	     	D methodObj.WriteLine($c(9,9)_"}")
+     	}
+     	Else
+     	{
+     		D methodObj.WriteLine($c(9,9)_"Set tStatus = "_Type_".Insert("""_itemName_":"_namespace_""")")
+     	}
+	}
+	D methodObj.WriteLine($c(9)_"} Catch(ex) {")
+	D methodObj.WriteLine($c(9,9)_"Set tStatus=ex.AsStatus()")
+	D methodObj.WriteLine($c(9)_"}")
+	D methodObj.WriteLine($c(9)_"Quit tStatus")
+	Quit methodObj
+}
+
+Method CustomPayloadMappingImple(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest) As %Stream.MethodGenerator
+{
+	Set namespace=""
+   	Set:($zconvert(JsonObj.System,"U")="HIE") namespace=JsonObj.NamespaceHIE
+   	Set:($Zconvert(JsonObj.System,"U")="INT") namespace=JsonObj.NamespaceINT
+	Set methodObj=##class(%Stream.MethodGenerator).%New()
+	Set methodObj.Language="cache"
+	Set methodObj.CodeMode="code"
+	D methodObj.WriteLine($c(9)_"Set tStatus = $$$OK")
+	D methodObj.WriteLine($c(9)_"Try{")
+	D methodObj.WriteLine($c(9,9)_"$$$TRACE(""Custom Mappings in child class"")")
+	If (JsonObj.Request'="") {
+		If JsonObj.Request.Count()>1 {
+			Do JsonObj.Status.InsertAt("More than one Request class, please update the CustomPayloadMapping method in process class with correct Request class" ,(JsonObj.Status.Count()+1))
+		}
+		Else {
+			Set ClsName = $Piece(JsonObj.Request.GetAt(1).Name,"^")
+			D methodObj.WriteLine($c(9,9)_"Set tOutputRecord=##class("_ClsName_").%New()")
+		}
+	}
+	Else {
+		 Do JsonObj.Status.InsertAt("Request class missing, please update the CustomPayloadMapping method in process class with correct Request class" ,(JsonObj.Status.Count()+1))
+	}
+	D methodObj.WriteLine($c(9,9)_"// Straight map source values from payload to source message class")
+	For codeType="Status:1","MemberId:2","MemberFirstName:3","MemberMiddleName:4","MemberLastName:5","MemberDOB:6","MemberGender:7","MemberAddress1:8","MemberAddress2:9","MemberCity:10","MemberState:11","MemberZipCode:12","MemberHomePhoneNumber:13","MemberMobilePhoneNumber:14","MemberEmailAddress:15"
+	{
+		Set property=$piece(codeType,":",1)
+		Set number=$piece(codeType,":",2)
+		D methodObj.WriteLine($c(9,9)_"Set tOutputRecord."_property_" = ..zStrip($PIECE(pPayLoad,$char(2),"_number_"))")
+	}
+	D methodObj.WriteLine($c(9,9)_"Set tOutputRecord.Status=pInputRequest.Status")
+	D methodObj.WriteLine($c(9,9)_"Set tOutputRecord.Type=pInputRequest.Type")
+	D methodObj.WriteLine($c(9,9)_"")
+	D methodObj.WriteLine($c(9,9)_"// Output")
+	D methodObj.WriteLine($c(9,9)_"Set pOutputRequest=tOutputRecord")
+	D methodObj.WriteLine($c(9)_"} Catch(ex) {")
+	D methodObj.WriteLine($c(9,9)_"Set tStatus=ex.AsStatus()")
+	D methodObj.WriteLine($c(9,9)_"$$$LOGERROR(""Error processing Active Record: ""_$SYSTEM.Status.GetErrorText(tStatus))")
+	D methodObj.WriteLine($c(9)_"}")
+	D methodObj.WriteLine($c(9)_"Quit tStatus")
+	Quit methodObj
+}
+
+Method GetSentToForProd(Operations As %String) As %String
+{
+	Set listOperationsWithFile = ""
+	For j = 1:1:$Length(Operations,","){
+		If $Piece($ZCONVERT(Operations,"U"),",",j) ["FILE"{
+			Continue
+		}Else{
+			Set listOperationsWithFile = listOperationsWithFile_","_$Piece(Operations,",",j)
+		}
+	}
+	Set listOperationsWithFile = $ZSTRIP(listOperationsWithFile,"<>",",")
+	Quit listOperationsWithFile
+}
+
+Method AddBusRegistryMapping(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest, Iter, ByRef Actions As Ens.DTL.ActionList) As %Status
+{
+	Set tSC=$$$OK
+	For DtlCnt=1:1:JsonObj.Classes.DTL.GetAt(Iter)."DefaultMappings".Count(){
+		Set tMappings=JsonObj.Classes.DTL.GetAt(Iter)."DefaultMappings".GetAt(DtlCnt)
+		Set tSource=$Piece(tMappings,":",2)
+		Set tSource=$Select(tSource'["source.":""""_tSource_"""",
+											 1:tSource)
+		Set tTarget=$Piece(tMappings,":",1)
+		Set Assign=##Class(Ens.DTL.Assign).%New()
+		Set Assign.Property=tTarget
+		Set Assign.Value=tSource
+		Set Assign.Action="set"
+		Do Actions.Insert(Assign)
+	}
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.MRN"
+	Set Assign.Value="$ZSTRIP(source.AccountNo,""&lt;"",""0"")"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)	
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.AA"
+	Set Assign.Value=""""_$ZCVT(JsonObj."Facility","U")_""""
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)	
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.ToTime"
+	Set Assign.Value="$zdatetime($H,3)"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	Quit tSC
+}
+
+Method AddToHealthshareSdaMapping(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest, Iter, ByRef Actions As Ens.DTL.ActionList)
+{
+	Set tSC=$$$OK
+	Set tFacility=$ZCVT(JsonObj.Facility,"U")
+	For DtlCnt=1:1:JsonObj.Classes.DTL.GetAt(Iter)."DefaultMappings".Count(){
+		Set tMappings=JsonObj.Classes.DTL.GetAt(Iter)."DefaultMappings".GetAt(DtlCnt)
+		Set tSource=$Piece(tMappings,":",2)
+		Set tSource=$Select(tSource'["source.":""""_tSource_"""",
+											 1:tSource)
+		Set tTarget=$Piece(tMappings,":",1)
+		Set Assign=##Class(Ens.DTL.Assign).%New()
+		Set Assign.Property=tTarget
+		Set Assign.Value=tSource
+		Set Assign.Action="set"
+		Do Actions.Insert(Assign)
+	}
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.SendingFacility"
+	Set Assign.Value="tFacility"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.CustomPairs.(1).Name"
+	Set Assign.Value="""Sending System"""
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.EventDescription"
+	Set value="$CASE(source.Type,""New"":"""_tFacility_" Enrollment"",""Updated"":"""_tFacility_" Update"",""Removed"":"""_tFacility_" Disenrollment"",:"""")"								
+	Set Assign.Value=value
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="tDataSource"
+	Set Assign.Value="tSource_"_"""_"""_"_tFacility"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.CustomPairs.(1).Value"
+	Set Assign.Value="tDataSource"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Code=##class(Ens.DTL.Code).%New()
+	Do Code.Code.Write("#; Patient SDA ")
+	Do Actions.Insert(Code)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.PatientNumbers.(1).NumberType"
+	Set Assign.Value="""MRN"""
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.PatientNumbers.(1).Organization.Code"
+	Set Assign.Value="tFacility"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.PatientNumbers.(1).Number"
+	Set Assign.Value="$ZSTRIP(source.AccountNo,""<"",""0"")"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.PatientNumbers.(1).ISOAssigningAuthority"
+	Set Assign.Value="tFacility"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)	
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.Name.FamilyName"
+	Set Assign.Value="source.LastName"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)	
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.Name.GivenName"
+	Set Assign.Value="source.FirstName"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.Name.MiddleName"
+	Set Assign.Value="source.MiddleInitial"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)	
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.Gender.Code"
+	Set Assign.Value="##class(CUSTOM.Util.DTL.FunctionSet).SQLLookup(""NslijAdministrativeSex"",tDataSource,source.Gender)"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)	
+
+  	Set IfBlock=##class(Ens.DTL.If).%New()
+  	Set IfBlock.Condition="source.DOB'?."" """
+  	Set Assign=##Class(Ens.DTL.Assign).%New()
+  	Set Assign.Property="tDOB"
+	Set Assign.Value="$zdatetime($zdatetimeh(source.DOB,7,,,,,,,,""""),3)"
+	Set Assign.Action="set"
+  	Do IfBlock.True.Insert(Assign)
+  	Set IfBlock1=##class(Ens.DTL.If).%New()
+  	Set IfBlock1.Condition="tDOB'=""1840-12-31"""
+   	Set Assign=##Class(Ens.DTL.Assign).%New()
+  	Set Assign.Property="target.Patient.BirthTime"
+	Set Assign.Value="tDOB"
+	Set Assign.Action="set" 	
+  	Do IfBlock1.True.Insert(Assign)
+  	Do IfBlock.True.Insert(IfBlock1)
+  	Do Actions.Insert(IfBlock)
+  	
+  	Set IfBlock=##class(Ens.DTL.If).%New()
+  	Set IfBlock.Condition="source.Address2'?."" """
+  	Set Assign=##Class(Ens.DTL.Assign).%New()
+  	Set Assign.Property="target.Patient.Addresses.(1).Street"
+	Set Assign.Value="source.Address1_"";""_source.Address2"
+	Set Assign.Action="set"
+  	Do IfBlock.True.Insert(Assign)  
+  	Set Assign=##Class(Ens.DTL.Assign).%New()
+  	Set Assign.Property="target.Patient.Addresses.(1).Street"
+	Set Assign.Value="source.Address1"
+	Set Assign.Action="set"	
+	Do IfBlock.False.Insert(Assign)
+	Do Actions.Insert(IfBlock)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.Addresses.(1).City.Description"
+	Set Assign.Value="source.City"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.Addresses.(1).State.Code"
+	Set Assign.Value="##class(CUSTOM.Util.DTL.FunctionSet).SQLLookup(""NslijState"",tDataSource,source.State)"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.Addresses.(1).Zip.Code"
+	Set Assign.Value="source.ZipCode"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.ContactInfo.HomePhoneNumber"
+	Set Assign.Value="source.PhoneHome"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.ContactInfo.MobilePhoneNumber"
+	Set Assign.Value="source.PhoneMobile"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)
+	
+	Set Assign=##Class(Ens.DTL.Assign).%New()
+	Set Assign.Property="target.Patient.ContactInfo.EmailAddress"
+	Set Assign.Value="source.Email"
+	Set Assign.Action="set"
+	Do Actions.Insert(Assign)	
+	Quit tSC
+}
+
+Method AddMessageToJSON(JsonObj As CUSTOM.CodeGenerator.Request.JsonRequest, tSC As %Status, message As %String)
+{
+	If $System.Status.IsOK(tSC) {
+		Do JsonObj.Status.InsertAt(message,(JsonObj.Status.Count()+1))
+	}
+	Else {
+		Do JsonObj.Status.InsertAt($System.Status.GetOneStatusText(tSC),(JsonObj.Status.Count()+1))
+	}
+}
+
+}
+
+
+****************************************
+
+Class CUSTOM.CodeGenerator.Request.JsonRequest Extends %RegisteredObject
+{
+
+Property System As %String;
+
+Property NamespaceHIE As %String;
+
+Property NamespaceINT As %String;
+
+Property Facility As %String;
+
+Property SourceApplication As %String;
+
+Property TargetApplication As %String;
+
+Property ProjectName As %String;
+
+Property StagingMember As %String(MAXLEN = 1024);
+
+Property StagingTable As %String(MAXLEN = 1024);
+
+Property StagingGateway As %String(MAXLEN = 1024);
+
+Property Classes As CUSTOM.CodeGenerator.Request.Classes;
+
+Property Lookup As list Of %String;
+
+Property Request As list Of CUSTOM.CodeGenerator.Request.Message;
+
+Property Response As list Of CUSTOM.CodeGenerator.Request.Message;
+
+Property Status As list Of %String;
+
+Property CodeGeneratedPRJ As %Studio.Project;
+
+}
+
+
+***********************************
+
+Class CUSTOM.CodeGenerator.Request.Classes Extends %RegisteredObject
+{
+
+Property Patch As %String;
+
+Property Components As CUSTOM.CodeGenerator.Request.Components;
+
+Property Rules As list Of %String;
+
+Property DTL As list Of CUSTOM.CodeGenerator.Request.DTL;
+
+}
+
+************************************
+
+Class CUSTOM.CodeGenerator.Request.DTL Extends %RegisteredObject
+{
+
+Property Name As %String;
+
+Property SourceClass As %String;
+
+Property TargetClass As %String;
+
+Property IsApplicableForRule As %Boolean;
+
+Property RuleName As %String(MAXLEN = 128);
+
+Property SendTo As %String(MAXLEN = "");
+
+Property DefaultMappings As list Of %String;
+
+}
+
+*******************************************
+
+Class CUSTOM.CodeGenerator.Request.Components Extends %RegisteredObject
+{
+
+Property BusinessService As list Of %String;
+
+Property BusinessProcess As list Of %String;
+
+Property BusinessOperation As list Of %String;
+
+}
+
+*******************************************
+
+Class CUSTOM.CodeGenerator.Request.Message Extends %RegisteredObject
+{
+
+Property Name As %String;
+
+Property Property As list Of %String;
+
+}
+***********************************************
+
+
+
+
+
