@@ -1,0 +1,143 @@
+Class CUSTOM.NESSUS.NSUH.DataTransformations.NsuhInvisionMfnToHcll Extends Ens.DataTransformDTL [ DependsOn = EnsLib.HL7.Message ]
+{
+
+Parameter IGNOREMISSINGSOURCE = 1;
+
+Parameter REPORTERRORS = 1;
+
+Parameter TREATEMPTYREPEATINGFIELDASNULL = 0;
+
+XData DTL [ XMLNamespace = "http://www.intersystems.com/dtl" ]
+{
+<transform sourceClass='EnsLib.HL7.Message' targetClass='EnsLib.HL7.Message' sourceDocType='Invision2.4:MFN_INV' targetDocType='HcllMFN2.5:MFN_HCLL' create='new' language='objectscript' >
+<code>
+<![CDATA[ #;MSH segment]]></code>
+<assign value='source.{MSH:2}' property='target.{MSH:2}' action='set' />
+<assign value='source.{MSH:3}' property='target.{MSH:3}' action='set' />
+<assign value='"NSHS_NY"' property='target.{MSH:4}' action='set' />
+<assign value='"HCLL"' property='target.{MSH:5}' action='set' />
+<assign value='"NSUH"' property='target.{MSH:6}' action='set' />
+<assign value='source.{MSH:7}' property='target.{MSH:7}' action='set' />
+<assign value='source.{MSH:9}' property='target.{MSH:9}' action='set' />
+<assign value='$ZStrip($ZDateTime($NOW(),3,1,6),"*PC")' property='target.{MSH:10}' action='set' />
+<assign value='source.{MSH:11}' property='target.{MSH:11}' action='set' />
+<assign value='"2.5"' property='target.{MSH:12}' action='set' />
+<assign value='source.{MSH:14}' property='target.{MSH:14}' action='set' />
+<assign value='source.{MSH:15}' property='target.{MSH:15}' action='set' />
+<code>
+<![CDATA[ #;EVN segment]]></code>
+<assign value='$Case(source.{MFEgrp(1).MFE:1},"MAD":"B01","MUP":"B02","MDC":"B05","MAC":"B04","MDL":"B05",:"")' property='target.{EVN:1}' action='set' />
+<if condition='..Contains(source.{MFEgrp(1).STF:7(1)},"I")' >
+<true>
+<assign value='"B05"' property='target.{EVN:1}' action='set' />
+</true>
+</if>
+<assign value='source.{MSH:7}' property='target.{EVN:2}' action='set' />
+<code>
+<![CDATA[ #;MFI segment]]></code>
+<assign value='source.{MFI:1}' property='target.{MFI:1}' action='set' />
+<assign value='source.{MFI:3}' property='target.{MFI:3}' action='set' />
+<assign value='source.{MFI:6}' property='target.{MFI:6}' action='set' />
+<code>
+<![CDATA[ #;MFE segment]]></code>
+<assign value='source.{MFEgrp(1).MFE:1}' property='target.{MFEgrp(1).MFE:1}' action='set' />
+<assign value='source.{MFEgrp(1).MFE:3}' property='target.{MFEgrp(1).MFE:3}' action='set' />
+<assign value='$Case(source.{MSH:4},"XJK0":"M","KLF":"M",:"")_source.{MFEgrp(1).MFE:4(1)}' property='target.{MFEgrp(1).MFE:4(1)}' action='set' />
+<assign value='source.{MFEgrp(1).MFE:5}' property='target.{MFEgrp(1).MFE:5}' action='set' />
+<code>
+<![CDATA[ #;STF segment]]></code>
+<assign value='source.{MFEgrp(1).STF:1}' property='target.{MFEgrp(1).STF:1}' action='set' />
+<assign value='source.{MFEgrp(1).STF:2(1)}' property='target.{MFEgrp(1).STF:2(1)}' action='set' />
+<if condition='..Contains(source.{MFEgrp(1).STF:3(1).1},",")' >
+<true>
+<assign value='$ZSTRIP(source.{MFEgrp(1).STF:3(1).1},"*P&apos;W")' property='vName' action='set' />
+<assign value='$E(vName,1,($Locate(vName," ")-1))' property='target.{MFEgrp(1).STF:3(1).1}' action='set' />
+<assign value='$E(vName,($Locate(vName," ")),$L(vName))' property='target.{MFEgrp(1).STF:3(1).2}' action='set' />
+<if condition='..Contains(target.{MFEgrp(1).STF:3(1).2}," ")' >
+<true>
+<assign value='$ZSTRIP(target.{MFEgrp(1).STF:3(1).2},"&lt;"," ")' property='target.{MFEgrp(1).STF:3(1).2}' action='set' />
+</true>
+</if>
+</true>
+<false>
+<if condition='..Contains(source.{MFEgrp(1).STF:3(1).1}," ")' >
+<true>
+<assign value='$ZSTRIP(source.{MFEgrp(1).STF:3(1).1},"*P&apos;W")' property='vName' action='set' />
+<assign value='$E(source.{MFEgrp(1).STF:3(1).1},1,($Locate(source.{MFEgrp(1).STF:3(1).1}," ")-1))' property='target.{MFEgrp(1).STF:3(1).1}' action='set' />
+<assign value='$E(source.{MFEgrp(1).STF:3(1).1},($Locate(source.{MFEgrp(1).STF:3(1).1}," ")),$L(source.{MFEgrp(1).STF:3(1).1}))' property='target.{MFEgrp(1).STF:3(1).2}' action='set' />
+<if condition='..Contains(target.{MFEgrp(1).STF:3(1).2}," ")' >
+<true>
+<assign value='$ZSTRIP(target.{MFEgrp(1).STF:3(1).2},"&lt;"," ")' property='target.{MFEgrp(1).STF:3(1).2}' action='set' />
+</true>
+</if>
+</true>
+</if>
+</false>
+</if>
+<assign value='source.{MFEgrp(1).PRA:5(1).1}' property='target.{MFEgrp(1).STF:9}' action='set' />
+<foreach property='source.{MFEgrp(1).STF:10()}' key='k1' >
+<if condition='source.{MFEgrp(1).STF:10(k1).2}="CO"' >
+<true>
+<assign value='source.{MFEgrp(1).STF:10(k1)}' property='target.{MFEgrp(1).STF:10(k1)}' action='set' />
+</true>
+<false>
+<if condition='source.{MFEgrp(1).STF:10(k1).2}="CF"' >
+<true>
+<assign value='"~~~~~"_source.{MFEgrp(1).STF:10(k1)}' property='target.{MFEgrp(1).STF:10(k1)}' action='set' />
+</true>
+</if>
+</false>
+</if>
+</foreach>
+<assign value='$Locate($Reverse(source.{MFEgrp(1).STF:11(1)}),"[a-z A-Z]")' property='vZipspace' action='set' />
+<assign value='$L(source.{MFEgrp(1).STF:11(1)})' property='vAddressLength' action='set' />
+<if condition='((vAddressLength-7)&lt;vZipspace)' >
+<true>
+<assign value='"BAD ADDRESS"' property='target.{MFEgrp(1).STF:11(1)}' action='set' />
+</true>
+<false>
+<if condition='$L(source.{MFEgrp(1).STF:11(1)})&gt;5' >
+<true>
+<if condition='$Locate(source.{MFEgrp(1).STF:11(1)},"[0-9]")&apos;="0"' >
+<true>
+<assign value='$E(source.{MFEgrp(1).STF:11(1)},1,20)' property='vStreet' action='set' />
+<assign value='$ZSTRIP(vStreet,"&gt;"," ")' property='target.{MFEgrp(1).STF:11(1).1}' action='set' />
+<assign value='$E(source.{MFEgrp(1).STF:11(1)},21,*)' property='vAddress2' action='set' />
+<assign value='$L(vAddress2)' property='vAddress2Length' action='set' />
+<assign value='$Locate(vAddress2,"[0-9]")' property='vZipIndex' action='set' />
+<assign value='$E(vAddress2,vZipIndex,vAddress2Length)' property='vZip' action='set' />
+<assign value='$ZSTRIP(vZip,"&gt;"," ")' property='target.{MFEgrp(1).STF:11(1).5}' action='set' />
+<assign value='(vZipIndex-3)' property='vStateIndex' action='set' />
+<assign value='$E(vAddress2,vStateIndex,(vZipIndex-1))' property='vState' action='set' />
+<assign value='$ZSTRIP(vState,"&gt;"," ")' property='target.{MFEgrp(1).STF:11(1).4}' action='set' />
+<assign value='(vAddress2Length-vStateIndex)' property='vCityLength' action='set' />
+<assign value='$E(vAddress2,1,(vAddress2Length-vCityLength-1))' property='vCity' action='set' />
+<assign value='$ZSTRIP(vCity,"&gt;"," ")' property='target.{MFEgrp(1).STF:11(1).3}' action='set' />
+<if condition='$E(vAddress2,vZipIndex-1)&apos;=" "' >
+<true>
+<assign value='"BAD ADDRESS"' property='target.{MFEgrp(1).STF:11(1)}' action='set' />
+</true>
+</if>
+</true>
+</if>
+</true>
+</if>
+</false>
+</if>
+<code>
+<![CDATA[ #;PRA segment]]></code>
+<assign value='source.{MFEgrp(1).PRA:1}' property='target.{MFEgrp(1).PRA:1}' action='set' />
+<assign value='source.{MFEgrp(1).PRA:5(1)}' property='target.{MFEgrp(1).PRA:5(1)}' action='set' />
+<foreach property='source.{MFEgrp(1).PRA:6()}' key='k1' >
+<if condition='..Contains(source.{MFEgrp(1).PRA:6(k1)},"NPI")' >
+<true>
+<assign value='source.{MFEgrp(1).PRA:6(k1)}' property='target.{MFEgrp(1).PRA:6}' action='set' />
+</true>
+</if>
+</foreach>
+<assign value='source.{MFEgrp(1).PRA:8}' property='target.{MFEgrp(1).PRA:8}' action='set' />
+<assign value='source.{MFEgrp(1).PRA:9}' property='target.{MFEgrp(1).PRA:9}' action='set' />
+</transform>
+}
+
+}
