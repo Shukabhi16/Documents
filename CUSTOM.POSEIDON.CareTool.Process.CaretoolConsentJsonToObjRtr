@@ -1,0 +1,77 @@
+Class CUSTOM.POSEIDON.CareTool.Process.CaretoolConsentJsonToObjRtr Extends Ens.BusinessProcess
+{
+
+Property TargetConfigItems As Ens.DataType.ConfigName [ InitialExpression = "CaretoolConsentSdaToHealthshareRtr" ];
+
+Parameter SETTINGS = "TargetConfigItems";
+
+Method OnRequest(pRequest As Ens.StreamContainer, Output pOutput As Ens.Response) As %Status
+{
+ 	// test
+	Set tsc = $$$OK
+	Try{
+		
+		// Convert Inbound StreamContainer into StringContainer
+		set pJson = ##class(Ens.StringContainer).%New()
+ 		set pJson.StringValue=pRequest.Stream
+ 		
+		#Dim tProxyResponse As CUSTOM.POSEIDON.CareTool.Message.ConsentObjectRequest
+		Set tsc=..ConvertJsonToObject(pJson,.tProxyResponse)
+		set tTargetCnt = $LENGTH(..TargetConfigItems, ",") 
+		For i=1:1:tTargetCnt {					
+			set pTarget = $zstrip($piece(..TargetConfigItems,",",i),"*P")
+			if (pTarget '= "") {
+				$$$THROWONERROR(tsc , ..SendRequestAsync(pTarget,tProxyResponse,0))
+			}
+		}
+	}Catch (Ex){
+		Set tsc=Ex.AsStatus()
+		$$$LOGERROR("Stream Error: "_$SYSTEM.Status.GetErrorText(tsc))
+	}
+	Quit tsc
+}
+
+Method ConvertJsonToObject(pJSON As Ens.StringContainer, Output pResponse As CUSTOM.POSEIDON.CareTool.Message.ConsentObjectRequest) As %Status
+{
+	try
+	{
+		// Creating object of messages class
+		Set pResponse = ##class(CUSTOM.POSEIDON.CareTool.Message.ConsentObjectRequest).%New()	 			
+		Set tSC=##class(%ZEN.Auxiliary.jsonProvider).%ParseJSON(pJSON.StringValue,.pClass,.pObject,,,,.pIgnoreUnknownProps)
+			
+		If (tSC)
+		{                                 
+			// Set response properties from the Proxy Object
+			Set pResponse.SourceApplication = pObject.SourceApplication
+			Set pResponse.PatientId = pObject.PatientId
+			Set pResponse.PatientType = pObject.PatientIdType
+			
+			Set pResponse.ConsentId = $Case(pObject.Entity.Status,
+										"Granted":"Y",
+										"Withdrawn":"N",
+										"Emergency Only":"E",:"NA")
+			If (pResponse.ConsentId '="NA")
+			{
+				Set pResponse.ConsentDateTime = $Extract($ZSTRIP(pObject.Entity.ConsentDateTime,"*","-"),1,8)			     	
+			}
+		}
+	}catch ex{
+		Set tSC=ex.AsStatus()
+	}
+	
+    Quit tSC
+}
+
+Storage Default
+{
+<Data name="CaretoolConsentJsonToObjRtrDefaultData">
+<Subscript>"CaretoolConsentJsonToObjRtr"</Subscript>
+<Value name="1">
+<Value>TargetConfigItems</Value>
+</Value>
+</Data>
+<DefaultData>CaretoolConsentJsonToObjRtrDefaultData</DefaultData>
+<Type>%Library.CacheStorage</Type>
+}
+
+}
