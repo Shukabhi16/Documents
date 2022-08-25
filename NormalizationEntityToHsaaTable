@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<lookupTable>
+<entry table="NormalizationEntityToHsaaTable" key="NslijAdmissionType">HSAA.Encounter-AdmissionType_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijAdmitSource">HSAA.Encounter-AdmissionSource_Description</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijAllergenType">HSAA.Allergy-AllergyCategory_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijAllergySeverity">HSAA.Allergy-Severity_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijAppointmentTypeCodes">HSAA.Appointment-Type_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijCountryCode">HSAA.Patient-Address_Country_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijDiagnosisStatus">HSAA.Diagnosis-Status_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijDiagnosisType">HSAA.Diagnosis-DiagnosisType_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijDischargeDisposition">HSAA.Encounter-DischargeDisposition_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijDocumentCompletionStatus">HSAA.Document-Status_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijDocumentType">HSAA.Document-DocumentType_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijEthnicGroup">HSAA.Patient-EthnicGroup_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijLabOrder">HSAA.HSAAOrder-OrderCode_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijLabResult">HSAA.LabResultItem-TestItemCode_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijLanguage">HSAA.Patient-PrimaryLanguage_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijLocation">HSAA.Appointment-Extension_Location</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijMaritalStatus">HSAA.Patient-MaritalStatus_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijObservations">HSAA.Observation-ObservationCode_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijRace">HSAA.Patient-Race_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijRadResult">HSAA.HSAAORDER-OrderCode_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijRelationship">HSAA.EncounterGuarantor-Relationship_Code</entry>
+<entry table="NormalizationEntityToHsaaTable" key="NslijReligion">HSAA.Patient-Religion_Code</entry>
+</lookupTable>
