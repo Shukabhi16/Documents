@@ -1,0 +1,723 @@
+Unix cmd's
+==========
+***VI
+   a) show line numnber - Press : (colon), type "set number" and hit Enter
+   b) copy and paste a line --> "yy" and 'p'
+   c) go to EOF --> "G$"
+   d) replacing every occurrence of a string in the entire text 
+        -->  :%s/pattern/replace/
+   e) Global search replace:
+		  :%s/search_string/replacement_string/g
+   f) change word --> :cw
+      this will allow you to just change the one word
+	  
+	  change multiple word --> :7cw
+	  this will allow you to change 7 words from where the cursor is
+   g) q!  --> quit w/o save
+
+***Disk space usage
+   a) AIX - "df -g"
+   b) Linux - "df -m" --> in MB
+              "df -h" --> in GB
+
+
+*** Mirroring need ISCAgent started
+	To check ISCAgent status:
+	/etc/rc.d/init.d/ISCAgent status/etc/rc.d/init.d/ISCAgent status/etc/rc.d/init.d/ISCAgent status
+
+    To start ISCAgent:
+	/etc/rc.d/init.d/ISCAgent start
+	
+	
+
+***Blank out a file: ------------------------------------> need to review once more
+	cat /dev/null > CSP.log
+
+
+***Disk Usage: -------------------------------------------> need discussion
+	a) du -ag | sort -n | tail -100
+	b) du -sg * (from Tom Dryer)
+	c) du -sk /var/log/* | sort -rn | head -5 (from Felix Saget)
+ Note: next step, look at cache.cpf for any suspicious database. Check see if it exists on other servers (primary/failover/DR).
+ e.g. on ENSPROD01D,
+ 125.52  ./MSGARCH
+ 125.52  ./MSGARCH/CACHE.DAT
+ This DB is only on "01D", but not the others. When check in cache.cpf, seeing this:
+ $ grep MSGARCH cache.cpf
+ MSGARCH=/ensprod01d/prd/int/healthshare/MSGARCH/Global_ANIL.MessageArchiveBackload=MSGARCH
+ So we know it's Anil.
+
+	
+***Append a file to another file
+   cat file1.txt >> file2.txt - will append content of file1.txt to file2.txt, file2.txt will have everything.
+
+
+*** Diff files on different servers
+	diff <(ssh cacheusr@mwbzhsrpap001l cat /opt/freeware/etc/httpd/conf/httpd.conf) <(cat /opt/freeware/etc/httpd/conf/httpd.conf)
+	
+	
+***nmon - ck server resource utilization
+		then 't' for top processes, 'm' for memory, 'c' for cpu
+		
+		
+*** Linux command to check memory/swap
+	free -m (in MB)
+	free -g (in GB)
+	More commands to check mem/swap --> https://phoenixnap.com/kb/linux-commands-check-memory-usage
+
+
+***Check page file (SWAP) usage:
+	lsps -s		-OR		svmon -O unit=GB
+
+	(**for below, only list processes of logged on user eg: cacheusr**)
+	svmon -Pt15 -O unit=GB  | perl -e 'while(<>){print if($.==2||$&&&!$s++);$.=0 if(/^-+$/)}'
+
+
+***lsdev - display information about devices in the Device Configuration database
+	lsdev -Cc disk	(shows disk information)
+
+
+***CREATE .tar.gz file:
+	tar -cvf <xx.tar> </DIRECTORIES/*>, the gzip the tar file.
+      e.g. a) tar cvf OldFiles.tar ./* 	
+           b) gzip OldFiles.tar
+
+** UNTAR and UNGZIP
+   a) ungzip OldFiles.tar/gz
+   b) tar xvf OldFiles.tar
+
+
+***Check empty/ available vg disk space:
+	lsvg datavg
+
+	
+***RESTART Apache on AIX:
+	AIX         - sudo /opt/freeware/sbin/apachectl restart |stop |start
+	ODS (Linux) - sudo /usr/sbin/apachectl restart |stop |start
+	IRIS Apache - stop  --> D ##CLASS(Config.Startup).StopWebServer()
+	            - start/restart --> D ##CLASS(Config.Startup).RestartWebServer()
+	            
+
+***CHECK Apache Version:
+	/opt/freeware/sbin/httpd -v
+
+***Apache log files:
+        /opt/freeware/etc/httpd/logs - access_log and error_log
+
+***Command to kill Apache when apache.ctl doesn't work:
+	sudo /usr/local/bin/killhttpd.sh
+
+***ps -ef | grep dsm -------------------------------------->>> need explanation of why <ps -ef is added with | infront of grep
+    	root 323742      1   0   Jun 18      - 581:56 /usr/tivoli/tsm/client/ba/bin/dsmc schedule
+
+***TSM/Tivoli backup log:
+	cd /usr/tivoli/tsm/client/ba/bin64
+	cat dsm.opt
+	look for the sections of the file that refer to log, such as  /var/adm/schedlog.out
+
+***SCP file copy from unix to unix (scp </path/file> <target server>:/<target file sys>/. :
+	scp FullDBList_20160428_001.cbk.gz hshiedev02a:/WORK/.
+
+
+***SCP MULTIPLE FILES to another system
+scp *.xml cacheusr@hietmpdev01:/hietmpdev01/lab/hie/healthshare/mgr/.
+
+
+***RSYNC file(s) from one host to another (sudo -u as "root" or preceed with sudo if on list):
+	rsync -avz -e "ssh" cacheusr@ensqa03a.nshs.edu:/app01/qa/int/healthshare/dev/sqljdbc_4.0 /ensprod03b/prd/int/healthshare/dev/.
+
+***su - cacheusr
+   cacheusr's Password:
+
+***to access root account type: 
+	sudo -u root su -
+
+*** Find a string in files
+    grep -R <string> <directory>
+    e.g. grep -R ZWVbd4 .   (find string "ZWVbd4" in the current directory)
+	
+
+*** find files w/ wildcard pattern
+    find .  -name '*.log' -print
+
+***find files in pwd older than 1 year old:
+	find . -mtime +365 -ls
+	find /opt/cspgateway/bin/temp/ -name *.dat -mtime +30 -exec ls -la {} \;
+	
+	
+***find files older than X number of days and remove them (e.g. file older than 60 days):	
+	find . -mtime +60 | xargs rm
+	 OR
+	find . -mtime +60 -exec rm -f {} \;
+
+***find files in pwd older than 1 year old and owned by a specific group and delete them
+	find . -mtime +365 -group cachegrp -exec \rm {} \; -ls
+	find /opt/cspgateway/bin/temp/ -name "*.dat" -mtime +50 -exec rm {} \;
+	
+*** find files older than 1 year and CP
+	find . -name +365 -exec cp {} /DESTINATION_DIR \;
+	
+*** find files older than 1 year and MV
+	find . -name +365 -exec mv {} /DESTINATION_DIR \;
+
+*** find files older than a specific date
+	find . ! -newer <file with the date/time that you want find>
+	e.g. find . ! -newer 20220519_ensidev01a_SARData.csv
+	       - -rw-r--r--    1 cacheusr cachegrp       3119 May 19 23:04 20220519_ensidev01a_SARData.csv
+		 This will return all the file in the dir that's older than May 19 23:04
+
+
+***find frame id for unix host:
+	ssh -q bpmsstageapp01a uname -Mu
+	IBM,8408-E8D IBM,0210861ET
+
+***ascynclog command:
+	/opt/CA/async_nsl.sh 4 "This is a test msg" isens
+	cat /var/adm/async.log
+
+***parse cconsole logfile realtime:
+	tail -f /ensprod01a/prd/int/healthshare/mgr/cconsole.log
+	
+*** Powershell tail command
+	Get-Content  .\<filename> -Tail 50 –Wait
+
+
+***View LAPR statistics (memory, cpu, etc..):
+	lparstat -i
+
+***how to check tsm:
+	/var/adm/schedlog.out
+
+***View DISK Errors:
+	errpt
+
+***Resize disk*** USE WITH CAUTION
+	chfs -a size=+/-"numberG" "/filesystem mount point"
+	chfs -a size=+50G /app01/stage/hie/healthshare
+
+***SHUTDOWN / RESTART AIX:
+	shutdown -rF now
+	shutdown -rF
+
+*** Find out if an AD user is valid
+	net user /domain <uesrname> -- e.g. net user /domain apang1
+
+
+
+*** Show connections on a server - to fix "license exceed limit" issue
+netstat -an | grep -v 127.0.0 | grep -i 443 | grep -i estab | awk -F " " '{print $5}'  | sort -n
+	- This showed me that we had a lot of connections going out to 10.170.175.165 (ensstage01a). 
+	  I tried to pull up http://10.170.175.165, which did not respond. 
+	  I logged in and bounced the web server on that box.
+
+
+***Login as another user
+e.g. su - cacheusr
+
+
+***Check Cron Jobs ------------------>> 
+     crontab -l
+
+***Show LPAR in which frame
+	1) uname -u - get the serial #, and match it with the frame in Cacti.
+		e.g. IBM,02219699W
+	2) Go to Galileo, find the LPAR, there's an asset that will show which frame it belongs to.
+		Find the LPAR > click "Properties" > find "Serial #" > click the serial # link (e.g. 219699W) 
+		and it will pop another page which show the frame name.
+	3) lsattr <servername> - displays information about the attributes of a specific device or type of device.
+	    e.g. lsattr -E -l sys0 --> this will show the systemid (systemid        IBM,02219699W)
+		
+		
+*** Fix port issue in SMP operation/interface/process
+1) SSH to the server and run "lsof | grep <port that's in question>"
+     e.g. lsof | grep 19013
+   This will return the process that's holding the port.
+     e.g. cache      7405858 cacheusr    3u  IPv4 0xf1001000247f63b8 0t0  TCP *:19013 (LISTEN)
+2) Go to SMP > Process and look for that process, it will tell you which production and component is
+   holding the port. 
+   
+   
+***Tracking down memory problems on AIX (by Ken)
+================================================
+a) procmap -X <PID> | grep -i heap
+   e.g. procmap -X 57344334 | grep -i heap
+
+b) echo What is in SWAP; echo ===; echo PID, Diff, Size, Resident Mem; ps auwwx | sort -kr6 | awk '{print $2" "$5-$6" "$5" "$6}'| head -20; echo ===; echo Full Display; echo ===;ps auwwx |head -1; ps auwwx | sort -kr4 |head -20
+
+c) ps auwxx | sort -k4r | head -21
+
+d) lsps -s
+
+e) select * from %SYS.ProcessQuery
+
+***Also! Look for lots of processes running. And if there are, look for queues. In some scenarios,
+if a web service interface is turned off, lots of small processes could be waiting for a queue
+to clear, or an interface to be turned on. If the problem is cleared up, then those processes
+will die and the problem will quickly clear itself up.
+
+ 
+***CPU and Memory Utilization of Processes on AIX environment ***
+==================================================================
+Displaying top CPU_consuming processes:
+#ps aux | head -1; ps aux | sort -rn +2 | head -10
+
+Displaying top 10 memory-consuming processes:
+#ps aux | head -1; ps aux | sort -rn +3 | head
+OR
+#ps auwxx | sort -k4r | head -21 (from Ken)
+
+Displaying process in order of being penalized:
+#ps -eakl | head -1; ps -eakl | sort -rn +5
+
+Displaying process in order of priority:
+#ps -eakl | sort -n +6 | head
+
+Displaying process in order of nice value
+#ps -eakl | sort -n +7
+
+Displaying the process in order of time
+#ps vx | head -1;ps vx | grep -v PID | sort -rn +3 | head -10
+
+Displaying the process in order of real memory use
+#ps vx | head -1; ps vx | grep -v PID | sort -rn +6 | head -10
+
+Displaying the process in order of I/O
+#ps vx | head -1; ps vx | grep -v PID | sort -rn +4 | head -10
+
+Displaying WLM classes
+#ps -a -o pid, user, class, pcpu, pmem, args
+
+Determinimg process ID of wait processes:
+#ps vg | head -1; ps vg | grep -w wait
+
+Wait process bound to CPU
+#ps -mo THREAD -p <PID>
+
+Cpu usage with priority levels
+#topas -P
+
+*** Restart Cache Instance in One Shot
+    /usr/bin/ccontrol stop <INSTANCE NAME> restart quietly
+	
+*** Count of Files within a directory
+	ls | wc -l
+	
+	
+***************CACHE CMD's*******************************************************************
+***SQL Query to get message count from a database:
+	FIRST - change db to intended target namespace in SMP
+	THEN SYSTEM - SQL - Execute Query:
+	select count(*) from Ens.MessageHeader
+or
+	select top 10 * from Ens.Messageheader
+
+***STOP a SINGLE PRODUCTION:
+	zn "[namespace]"
+	d ##class(Ens.Director).StopProduction()
+	Note: d ##class(Ens.Director).StopProduction(2,1) --> w/ the (2,1) parameter, it will suspend if it has to, then stop, this will stop quicker.
+	      d ##class(Ens.Director).StopProduction(,1) --> (,1) will force the production down.
+	
+***START a SINGLE PRODUCTION
+	zn "[namespace]"
+	Do ##class(Ens.Director).StartProduction()
+	Do ##class(Ens.Director).StartProduction("myProduction")  ## this will start the last running production
+ 
+***RECOVER a SINGLE PRODUCTION
+	zn "[namespace]"
+	Do ##class(Ens.Director).RecoverProduction()
+	
+Note: docs on start/stop single production 
+  - http://localhost:57773/csp/docbook/DocBook.UI.Page.cls?KEY=EGDV_adv_ens.director_prod_startstop
+
+
+***STOP/START ALL PRODUCTIONS VIA PROCEEDURE***
+	bash-4.2$ su - cacheusr
+	cacheusr's Password: 
+	$ bash
+	bash-4.2$ csession hietmpdev01
+	Node: mykdhietap001l, Instance: HIETMPDEV01
+
+	USER>zn "HSLIB"
+
+	HSLIB>d ##class(HS.Director).StopAll()
+	
+	***to restart all MUST BE SU'd to OS AS CACHEUSR BEFORE STARTING***
+	HSLIB>d ##class(HS.Director).StartAll()
+
+***FORCE CACHE Instance DOWN
+	ccontrol force [instance name]
+
+
+***view cache status: 
+	ccontrol list
+
+***View DB/ Healshre total space for backup
+	terminal to "%SYS%
+	run: d ^DBSIZE
+
+**** for cleaning Cachetemp or Deleting any files
+
+> open two SSH session - 1 as Cacheuser and one as own id
+> use own user-id to stop Cache and Cacheusr to remove the file.
+> Keep snap of Prod environments and Task Schedules before stopping Cache
+> wait for Cache to stop before removing the Cache.dat
+> tail -f cconsole.log
+> go to Cachetemp folder, with Cacheusr and - < rm Cache.dat >
+> reach to GMS team - for the pending process and Operations if not started
+> Dev on-call team, IS Integration support team for verifying if all productions items got started after Cache reboot. 
+	- can try by doubleclick and resrat servic/process/operation of Production items , if not then escalate to GMS team [IS Integration Support mail group]
+
+
+***PURGE JOURNALS (NEED TO su as cacheusr first!):
+
+Before purging verify that database is mirrored or not. If Mirrored then it needs extra care 
+
+1) SSH in as "cacheusr"
+
+	**VIA ##CLASS METHOD:
+	do ##class(%SYS.Journal.File).PurgeAll()
+
+2) bash-4.2$ ccontrol list
+
+ Configuration 'ENSPROD01B'   (default)
+        directory: /ensprod01b/prd/int/healthshare
+        versionid: 2013.1.2.601.0
+        conf file: cache.cpf  (SuperServer port = 1972, WebServer = 80)
+        status:    running, since Thu Oct 27 18:17:45 2016
+        state:     ok
+3) bash-4.2$ ccontrol session ENSPROD01B -U "%SYS"
+
+  Node: ensprod01b, Instance: ENSPROD01B
+
+  Username: cacheusr (or _SYSTEM)
+  Password: *********
+4) %SYS>do ^JOURNAL
+
+
+  1) Begin Journaling (^JRNSTART)
+  2) Stop Journaling (^JRNSTOP)
+  3) Switch Journal File (^JRNSWTCH)
+  4) Restore Globals From Journal (^JRNRESTO)
+  5) Display Journal File (^JRNDUMP)
+  6) Purge Journal Files (PURGE^JOURNAL)
+  7) Edit Journal Properties (^JRNOPTS)
+  8) Activate or Deactivate Journal Encryption (ENCRYPT^JOURNAL())
+  9) Display Journal status (Status^JOURNAL)
+ 10) -not available-
+ 11) -not available-
+ 12) Journal catch-up for mirrored databases (MirrorCatchup^JRNRESTO)
+
+5) Option? 6
+
+  1) Purge any journal NOT required for transaction rollback or crash recovery
+  2) Purge journals based on existing criteria (2 days or 2 backups)
+
+6) (Use Option 1 per Frank - AP 8/21/2019 Wed)
+Option 1 - will purge everything right away, except for the journal that has transaction log (if there's a transaction log).
+Option? 2 (WAIT UNTIL MIDNIGHT or 2 DAY PURGE WILL FAIL)
+
+The following journal files have been purged (listed from latest to oldest): 
+<ENTER>
+%SYS>halt (ends ccontrol)
+5
+
+
+
+*** Can't purge journal -> check for open transaction(s)
+How to Check if there is an open transaction:
+
+W $ZU(78,66) – tells you 0/1 whether there is an open transaction
+W $ZU(78,21)
+
+%SYS>W $ZU(78,21)
+
+198907896,/hsedgeprod01/prd/hie/journal/20200728.001,762,762,193305388,13350,198711068,762
+
+If column 3 & 4 are the same, then no open transactions. If there is an open transaction, column 4 is the journal file number, and 5 is the offset (I think). 
+Search for mirrorjrn-MIRRORNAME.log for the journal file number, 
+then open that up and look at the offset to determine who owns the transaction.
+
+The last two fields should tell you what journal file holds the open transaction (if there is one), and what journal offset the TSTART is at.
+
+Note: Transaction is created when the system want to rollback a stuck message, routine, etc.
+
+
+
+***Switch ALT JOURNAL from Primary back to Secondary
+1) Do the journal menu
+2) Choose option 7 for journal properties:
+   a) change the "primary journal" to point to “altjournal” directory.
+   b) check “altjournal” directory see if journal is writing to it.
+3) When issue resolved, you set both primary and secondary journal to the original journal, 
+     it will trick the system that there’s only one file system, and it will revert back.
+4) Then put altjournal as the secondary again.
+5) Type “halt” to quit.
+
+
+
+***STOP/ START Cache***
+Checklist,
+
+1. Take a snap of running Tasks and services before shutting down 
+2. Send information mail
+				
+bash-4.2$ ccontrol stop HSAGSHDW02
+
+                  Cache Shutdown Status: 10:58 am 08 Feb 2017
+
+       0 interactive jobs (Telnet/Lat)
+       1 background job (from job command)
+       0 Cache Direct server jobs
+      16 CSP server jobs
+       0 ODBC server jobs
+      31 system jobs
+
+Do you want to broadcast a message to anyone? No => no
+Do you want to see the Cache status report? No => no
+Do you want to run the user defined shutdown routine? Yes => no
+Are you ready for the system to halt? Yes => yes
+
+10:59:07 Shutting down Cache
+10:59:08 Notifying Clients
+10:59:08 No user shutdown routines to execute
+10:59:08 Stopping User Jobs
+10:59:12 Stopping Network Servers
+10:59:12 Withdrawing from License Domain
+10:59:12 Waiting for users to stop
+10:59:14 0 user processes remain
+10:59:16 Stopping Client Networking
+10:59:16 Removing database locks
+10:59:17 Updating Journal File
+10:59:18 Waiting for database updates to complete
+10:59:18 Database updates complete
+10:59:18 Stopping System Jobs
+10:59:20 Shutdown complete
+
+***START CACHE***
+
+bash-4.2$ ccontrol start HSAGSHDW02
+Starting HSAGSHDW02
+using 'cache.cpf' configuration file
+
+Starting Control Process
+Automatically configuring buffers
+Allocated 448MB shared memory: 256MB global buffers, 35MB routine buffers
+Creating a WIJ file to hold 31 megabytes of data
+This copy of Cache has been licensed for use exclusively by:
+Northwell Health
+Copyright (c) 1986-2016 by InterSystems Corporation
+Any other use is a violation of your license agreement
+
+CheckList
+1. After restart check all the Productions has started from MP Home page
+2. Check Task Scheduler to check valid Tasks has started or start it after comparing the snap taken before shutdown.
+
+bash-4.2$ ccontrol list
+
+Configuration 'HSAGPROD02'   (default)
+        directory: /hsagprod02c/prd/hie/healthshare
+        versionid: 2014.1.2.753.0
+        conf file: cache.cpf  (SuperServer port = 1972, WebServer = 80)
+        status:    down, last used Sat Jul  9 02:26:02 2016
+
+Configuration 'HSAGSHDW02'
+        directory: /hsagprod02c/prd/hie/healthshare/shadow
+        versionid: 2015.2.1.705.0.16273
+        conf file: cache.cpf  (SuperServer port = 1973, WebServer = 80)
+        status:    running, since Wed Feb  8 11:01:41 2017
+        state:     ok
+
+
+***MIRROR MGMT UTIL*****
+
+*disable failover on mirror set*
+
+%SYS>d ^MIRROR
+
+
+1) Mirror Status
+2) Mirror Management
+3) Mirror Configuration
+
+Option? 2
+
+ 1) Add mirrored database(s)
+ 2) Remove mirrored database(s)
+ 3) Activate or Catchup mirrored database(s)
+ 4) Change No Failover State
+ 5) Try to make this the primary
+ 6) Connect to Mirror
+ 7) Disconnect from Mirror
+ 8) Modify Database Size Field(s)
+ 9) Force this node to become the primary
+10) Promote Async DR member to Failover member
+11) Demote Backup member to Async DR member
+12) Mark an inactive database as caught up
+13) Manage mirror dejournaling on reporting member (disabled)
+14) Pause dejournaling for database(s)
+
+Option? 4
+No failover mode is not set, do you want to set it? <N> yes
+
+1) ENSATOMPROD01A
+2) ENSATOMPROD01B
+
+Node to set as the defined primary? 1
+Success
+
+1) Mirror Status
+2) Mirror Management
+3) Mirror Configuration
+
+Option? 1
+
+1) List mirrored databases
+2) Display mirror status of this node
+3) Display journal file info
+4) Status Monitor
+
+Option? 4
+Status of Mirror ENSATOMPROD01 at 15:45:31 on 05/03/2018
+Member Name+Type            Status     Journal Latency  DB Latency
+--------------------------  ---------  ---------------  --------------
+ENSATOMPROD01A
+     Failover               Primary    N/A              N/A
+ENSATOMPROD01B
+     Failover               Backup     Active           Caught up
+ENSATOMPROD01C
+     Disaster Recovery      Connected  Caught up        Caught up
+ENSATOMPROD01D
+     Disaster Recovery      Connected  Caught up        Caught up
+
+Mirror is in no failover mode, ENSATOMPROD01A must be the primary
+
+***RE-Enable failover***
+
+Option?
+
+1) Mirror Status
+2) Mirror Management
+3) Mirror Configuration
+
+Option? 2
+
+ 1) Add mirrored database(s)
+ 2) Remove mirrored database(s)
+ 3) Activate or Catchup mirrored database(s)
+ 4) Change No Failover State
+ 5) Try to make this the primary
+ 6) Connect to Mirror
+ 7) Disconnect from Mirror
+ 8) Modify Database Size Field(s)
+ 9) Force this node to become the primary
+10) Promote Async DR member to Failover member
+11) Demote Backup member to Async DR member
+12) Mark an inactive database as caught up
+13) Manage mirror dejournaling on reporting member (disabled)
+14) Pause dejournaling for database(s)
+
+Option? 4
+ENSATOMPROD01A is currently defined as the primary
+Do you want to clear this? <N> yes
+Success
+
+Option?
+
+1) Mirror Status
+2) Mirror Management
+3) Mirror Configuration
+
+Option? 1
+
+1) List mirrored databases
+2) Display mirror status of this node
+3) Display journal file info
+4) Status Monitor
+
+Option? 4
+Status of Mirror ENSATOMPROD01 at 16:09:21 on 05/03/2018
+Member Name+Type            Status     Journal Latency  DB Latency
+--------------------------  ---------  ---------------  --------------
+ENSATOMPROD01A
+     Failover               Primary    N/A              N/A
+ENSATOMPROD01B
+     Failover               Backup     Active           Caught up
+ENSATOMPROD01C
+     Disaster Recovery      Connected  Caught up        4 seconds behind
+ENSATOMPROD01D
+     Disaster Recovery      Connected  Caught up        Caught up
+
+
+
+*** Check process in Ensemble/HealthShare***
+In Mgmt Portal, go to System Operation > Process
+, to find the PID.
+
+==================================================================================================================
+Siddhartha's Part
+=================
+
+Credential
+cacheusr
+Hie23!int
+!Hie00Med
+!ris00Text
+!risProd
+!risStage
+!risDev
+!risIdev
+newpass
+==================
+ccontrol session <instancename>
+use ! before linux command when logged in as Cache user 
+from SYS prompt 
+	do ^JOURNAL
+
+When not able to purge , call WRC
+============================
+Integrity Check
+==============
+Do CheckPointer^Integrity - asks for a directory and a pointer block at which to start checking.
+
+Do Silent^Integrity(logfilename,dirlist) - starts a background process that does an integrity check on selected or all databases and puts the output in a file specified by the logfilename parameter. The optional dirlist parameter ($LIST format) identifies selected databases to check; if dirlist is not specified, all databases are checked.
+
+This is the equivalent of doing Integrity Check from the Databases page (System Operation > Databases) of the Management Portal.
+
+Do Query^Integrity(logfilename,outdevice) - does not run an integrity check, but puts the contents of the file specified by the logfilename parameter, the results saved from a previous run, out on the current device or the device specified in the optional parameter outdevice.
+
+If not specified, outdevice is the current terminal. Examples of outdevice are a printer, another display device, or another operating system file name. The latter makes a copy of logfilename.
+
+Do SilentGlobalCheck^Integrity(logfilename,dir,gbllist) - starts a background process that does an integrity check on selected globals in a selected database and puts the output in a file specified by the logfilename parameter. The dir parameter identifies the database that contains the globals you want to check. The required gbllist parameter ($LIST format) identifies one or more globals to check.
+
+This is the equivalent of choosing Select Globals when doing Integrity Check from the Databases page (System Operation > Databases) of the Management Portal.
+
+Do CheckList^Integrity(outputglobal,dirlist,stopafteranyerror,listofglolist,maxproc) - stores the results of integrity check, including information and warnings, in the global specified by the optional outputglobal parameter; if it is not specified, the results are stored in ^CacheTempIntegrityOutput($JOB). The optional dirlist parameter specifies a $LIST of all the directories you want to check; if it is not specified, all directories are checked. If the stopafteranyerror parameter is specified, checking on a directory stops when an error is found. The optional listofglolist parameter specifies a $LIST of $LISTs of global name, one for each directory specified in the dirlist parameter which, for example, lets you check all oddDEF globals in all directories by specifying $LB($LB("oddDEF")); if there are fewer elements in the listofglolist parameter than in the list of directories, the last element is used for the rest of the directories. The optional maxproc parameter specifies the upper bound to the number of background jobs used: if it is <1, the number of cores (where the number of cores on the machine, as well as the number of directories to be checked, always act as an upper bound) on the machine are used; if it is 1, the integrity check is done directly in the foreground process.
+
+Do Display^Integrity(integritout,flags,dirsum) - displays the results of integrity check. The optional integritout parameter specifies the name of the global where the results if integrity check were placed (by CheckList^Integrity); if it is not specified, it defaults to ^CacheTempIntegrityOutput($JOB). The optional flags parameter specifies can be: 0 (to display all messages), 1 (to display only errors and warnings), or 2 (to display only errors); if it is not specified, the default is 0. If the optional dirsum parameter is specified and is not 0, the display will include a summary of blocks for each Directory scanned.
+
+Do Exclude^Integrity - asks for a list of databases to exclude from checking; entering ? displays a list of mounted databases.
+
+===============
+
+Snap.sh script runs Freeze and Thaw script during backup
+
+>> mykpmedif001l, 2l - Media servers do not login unless instructed
+
+>> mykpsnapap001l is snap server for Integrity check - this is no the backup server but gets the copy of backup from Media servers
+
+go to processes 
+	look for sys .database
+
+> you need to see what PID is for and check with Developer if this can be killed or further investigation is required.
+> monitor , if trouble found and not sure - call "on call"
+
+What is "cache locks (mode count)" alert
+
+
+------------>>> Integrity chk completed and next task started. Check you have received mail and log file is there.
+Then check for running tasks using following command and get the PID and from SMP or command 
+
+ps -ef | grep -i task
+----->>> kill the task with parent PID , after kill make sure Integrity check is not in Suspended mode. if so then force kill
+ccontrol stop  <Instance Name>
+
